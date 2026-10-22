@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CDOT Inspection Stations</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Colorado Inspection Stations</h1>
+    <p class="sub">CSP/CDOT commercial vehicle ports of entry · status is reported manually, not live from the state</p>
+  </header>
+  <main>
+    <section id="list" aria-label="Stations"></section>
+    <div id="map" role="application" aria-label="Station map"></div>
+  </main>
+  <dialog id="editor">
+    <form method="dialog">
+      <h2 id="editor-title"></h2>
+      <label>Status
+        <select id="f-status"><option value="open">Open</option><option value="closed">Closed</option><option value="unknown">Unknown</option></select>
+      </label>
+      <label>Note <textarea id="f-note" maxlength="280" rows="3" placeholder="e.g. Wait ~15 min, EB lane only"></textarea></label>
+      <label id="token-row" hidden>Access token <input id="f-token" type="password" autocomplete="off"></label>
+      <p id="f-error" class="error" role="alert"></p>
+      <menu><button value="cancel">Cancel</button><button id="f-save" value="save">Save</button></menu>
+    </form>
+  </dialog>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

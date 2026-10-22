@@ -1,0 +1,28 @@
+:root { --bg:#f6f7f9; --card:#fff; --ink:#1b2430; --muted:#5d6b7c; --line:#dde2e8; --open:#1a7f43; --closed:#c0392b; --unknown:#7a8594; --planned:#b07d00; }
+@media (prefers-color-scheme: dark) { :root { --bg:#12161c; --card:#1b212a; --ink:#e8ecf1; --muted:#9aa7b6; --line:#2c3541; --open:#4cc27f; --closed:#ff6b5b; --unknown:#8b97a6; --planned:#e0b13c; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.4 system-ui, sans-serif; }
+header { padding:14px 16px; border-bottom:1px solid var(--line); background:var(--card); }
+h1 { margin:0; font-size:1.2rem; }
+.sub { margin:2px 0 0; color:var(--muted); font-size:.85rem; }
+main { display:grid; grid-template-columns:minmax(300px,380px) 1fr; height:calc(100vh - 66px); }
+#list { overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+#map { height:100%; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; cursor:pointer; }
+.card:focus-visible { outline:2px solid var(--open); }
+.card h3 { margin:0; font-size:1rem; display:flex; justify-content:space-between; gap:8px; }
+.meta, .when { color:var(--muted); font-size:.82rem; }
+.note { margin:4px 0; }
+.badge { font-size:.75rem; font-weight:600; padding:1px 8px; border-radius:99px; border:1px solid currentColor; text-transform:uppercase; }
+.open { color:var(--open); } .closed { color:var(--closed); } .unknown { color:var(--unknown); } .planned { color:var(--planned); }
+.actions { display:flex; gap:8px; margin-top:6px; }
+button { font:inherit; padding:4px 12px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+dialog { border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); width:min(92vw,380px); }
+dialog label { display:block; margin:10px 0; font-weight:600; font-size:.85rem; }
+dialog select, dialog textarea, dialog input { display:block; width:100%; margin-top:4px; font:inherit; padding:6px; background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:6px; }
+dialog menu { display:flex; justify-content:flex-end; gap:8px; padding:0; }
+.error { color:var(--closed); min-height:1.2em; margin:0; }
+.pin { width:18px; height:18px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 0 1px #0006; }
+@media (max-width:760px) { main { grid-template-columns:1fr; grid-template-rows:45vh 1fr; height:auto; } #map { order:-1; height:45vh; } #list { overflow:visible; } }
+a { color: var(--muted); }
+[hidden] { display: none !important; }

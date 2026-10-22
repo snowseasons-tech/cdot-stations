@@ -1,0 +1,192 @@
+{
+  "source": "https://services.arcgis.com/yzB9WM8W0BO3Ql7d/ArcGIS/rest/services/POELocations/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson",
+  "fetchedAt": "2026-10-22T00:51:14.802Z",
+  "stations": [
+    {
+      "id": "cortez",
+      "name": "Cortez",
+      "highway": "US-160",
+      "planned": false,
+      "phone": "970-565-9420",
+      "locations": [
+        {
+          "direction": "NB/SB",
+          "milepost": 35.2,
+          "lat": 37.3143300000146,
+          "lng": -108.608267000183
+        }
+      ]
+    },
+    {
+      "id": "dumont",
+      "name": "Dumont",
+      "highway": "I-70",
+      "planned": false,
+      "phone": "303-567-4807",
+      "locations": [
+        {
+          "direction": "WB",
+          "milepost": 234,
+          "lat": 39.7661150002382,
+          "lng": -105.617168000113
+        },
+        {
+          "direction": "EB",
+          "milepost": 234,
+          "lat": 39.765330999807,
+          "lng": -105.61258500035
+        }
+      ]
+    },
+    {
+      "id": "fort-collins",
+      "name": "Fort Collins",
+      "highway": "I-25",
+      "planned": false,
+      "phone": "970-482-1622",
+      "locations": [
+        {
+          "direction": "NB",
+          "milepost": 267.6,
+          "lat": 40.556742000305,
+          "lng": -105.000650000337
+        },
+        {
+          "direction": "SB",
+          "milepost": 267.8,
+          "lat": 40.5563769997741,
+          "lng": -105.000879999592
+        }
+      ]
+    },
+    {
+      "id": "fort-morgan",
+      "name": "Fort Morgan",
+      "highway": "I-76",
+      "planned": false,
+      "phone": "970-867-5623",
+      "locations": [
+        {
+          "direction": "WB",
+          "milepost": 74.7,
+          "lat": 40.2449830003314,
+          "lng": -103.898522999704
+        },
+        {
+          "direction": "EB",
+          "milepost": 74.4,
+          "lat": 40.2451039997805,
+          "lng": -103.897255999658
+        }
+      ]
+    },
+    {
+      "id": "lamar",
+      "name": "Lamar",
+      "highway": "US-50",
+      "planned": false,
+      "phone": "719-336-4712",
+      "locations": [
+        {
+          "direction": "WB",
+          "milepost": 433.2,
+          "lat": 38.1146550001881,
+          "lng": -102.628419999839
+        },
+        {
+          "direction": "EB",
+          "milepost": 432.9,
+          "lat": 38.1146179998551,
+          "lng": -102.627778999781
+        }
+      ]
+    },
+    {
+      "id": "limon",
+      "name": "Limon",
+      "highway": "I-70",
+      "planned": false,
+      "phone": "719-775-9758",
+      "locations": [
+        {
+          "direction": "WB",
+          "milepost": 360.8,
+          "lat": 39.2734749999787,
+          "lng": -103.686262000021
+        },
+        {
+          "direction": "EB",
+          "milepost": 360.5,
+          "lat": 39.2731990000228,
+          "lng": -103.685716000398
+        }
+      ]
+    },
+    {
+      "id": "loma",
+      "name": "Loma",
+      "highway": "I-70",
+      "planned": false,
+      "phone": "970-858-1068",
+      "locations": [
+        {
+          "direction": "WB/EB",
+          "milepost": 14.7,
+          "lat": 39.1779329998031,
+          "lng": -108.819649000157
+        }
+      ]
+    },
+    {
+      "id": "monument",
+      "name": "Monument",
+      "highway": "I-25",
+      "planned": false,
+      "phone": "719-481-2281",
+      "locations": [
+        {
+          "direction": "NB",
+          "milepost": 161.2,
+          "lat": 39.1005499997868,
+          "lng": -104.863961000131
+        },
+        {
+          "direction": "SB",
+          "milepost": 162,
+          "lat": 39.1003860000199,
+          "lng": -104.864189999561
+        }
+      ]
+    },
+    {
+      "id": "platteville",
+      "name": "Platteville",
+      "highway": "US-85",
+      "planned": true,
+      "phone": null,
+      "locations": [
+        {
+          "direction": "Center",
+          "milepost": 249.6,
+          "lat": 40.193153999907,
+          "lng": -104.8208239999
+        }
+      ]
+    },
+    {
+      "id": "trinidad",
+      "name": "Trinidad",
+      "highway": "I-25",
+      "planned": false,
+      "phone": "719-846-2408",
+      "locations": [
+        {
+          "direction": "NB/SB",
+          "milepost": 11,
+          "lat": 37.136790999836,
+          "lng": -104.520256999804
+        }
+      ]
+    }
+  ]
+}

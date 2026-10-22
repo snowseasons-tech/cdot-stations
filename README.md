@@ -225,6 +225,44 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 - `PUT /api/stations/:id/status` with `{"status":"open|closed|unknown","note":"..."}`
 - `POST /api/import` with `{"source":"csp","records":[{"station":"limon","status":"open"}]}` (max 500 records) returns `{updated, unchanged, skipped}`
 
+## Troubleshooting
+
+Commands that mention `docker` need a user in the `docker` group. In a session started before you were added, prefix them with `sg docker -c "..."`.
+
+**Container won't start or keeps restarting.** Look at `docker logs --tail 50 cdot-stations`.
+- `Refusing to listen on 0.0.0.0 without STATUS_TOKEN`: the container needs the token (`~/cdot-stations/env` on the server, written by the deploy job from the `STATUS_TOKEN` secret). Re-run the deploy, or set `ALLOW_OPEN_WRITES=1` only on a private network.
+- `ERR_MODULE_NOT_FOUND`: a source file is missing from the image. The Dockerfile copies every root `*.js` plus specific folders, so a new top-level folder or data file must be added to it. CI's smoke test catches this before anything is published; reproduce it locally with `docker build -t cdot-local . && bash scripts/smoke-test-image.sh cdot-local`.
+- A failed deploy rolls back automatically, so the previous version keeps serving. The deploy job's log shows why the new one failed.
+
+**The deploy job is skipped, or waits forever.**
+- *Skipped:* the `DEPLOY_ENABLED` repository variable isn't `true` (`gh variable list`). Pull requests never deploy.
+- *Queued and never starts:* the self-hosted runner is offline. Check `gh api repos/snowseasons-tech/cdot-stations/actions/runners -q '.runners[] | "\(.name) \(.status)"'` and `systemctl status 'actions.runner.*'` on the server; restart with `sudo systemctl restart 'actions.runner.*'`.
+- *`permission denied ... docker.sock`:* the runner's user isn't in the `docker` group (`sudo usermod -aG docker $USER`), then restart the runner service so it picks the group up.
+
+**The page doesn't load from another device.** Check on the server: `ss -ltn | grep 8080` (is nginx listening), `sudo nginx -t`, and the firewall (`sudo ufw allow 8080/tcp`). The server's address comes from DHCP and can change, so check `ip -4 addr` and consider a reservation in your router. `curl localhost:8080/api/stations` working but other devices failing points at the firewall or the address.
+
+**Status updates are rejected.**
+- `401`: wrong or missing token. The server's copy is in `~/cdot-stations/env`. GitHub secrets can't be read back, so to rotate it run `openssl rand -hex 32 | gh secret set STATUS_TOKEN` and re-run the deploy workflow.
+- `429`: 10 failed attempts within a minute lock a client out until `Retry-After` passes. Behind nginx the client is identified by `X-Real-IP`, so one person's typos don't lock out others.
+- `409`: the station is planned (Platteville) and can't have a status.
+
+**Statuses disappeared after a deploy or restart.** They live in the `cdot-data` Docker volume. Check `docker volume ls | grep cdot-data` and that the container was started with `-v cdot-data:/var/lib/cdot` (the deploy script does this). If they are gone, restore the latest backup (see Backups).
+
+**The map is blank or unstyled.** Open the browser console.
+- A *CSP* or *integrity* error means a CDN file changed or a header was tightened. After changing the Leaflet version, update both integrity hashes in `public/index.html` (`npm test` checks they exist).
+- Tiles load from OpenStreetMap and need internet access and a Referer; don't set a `no-referrer` policy.
+
+**Inspection numbers look old or low.** The newest month is partial (FMCSA data arrives late). Check `through` in `data/inspections.json`, and run the refresh on demand: `gh workflow run refresh-data.yml`. A refresh that fails with `refusing to overwrite` or `more than 20% fewer` is the safety net working: look at the source, and if the new data is right, run `FORCE=1 npm run sync:inspections` (or `sync:locations`, `sync`) locally, review the diff, and commit. `CDOT's layer no longer lists ...` means a station disappeared from CDOT's layer; its id keys saved statuses, so confirm before forcing.
+
+**Backups.** Read `~/cdot-stations/backup.log` first.
+- `no status file yet; nothing to back up` is normal until the first status is saved.
+- `cannot reach a running container named cdot-stations`: the container is down, or cron's user can't use docker. Check `docker ps` and `crontab -l`.
+- `NOT backing it up`: `status.json` isn't valid; restore from the last good backup.
+- No log lines for days: cron isn't running (`systemctl is-active cron`). The `backup-missing` issue in the backup repo will say so after about 30 hours.
+- Local copies appear but the off-site push fails: the `gh` login expired (`gh auth status`, then `gh auth login`).
+
+To restore, see Backups; to stop the alerts temporarily, set `ALERT_REPO=""` in the cron line.
+
 ## Changes
 
 See [CHANGELOG.md](CHANGELOG.md). Add an entry under *Unreleased* when you change something users or operators would notice.

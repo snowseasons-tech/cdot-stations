@@ -466,6 +466,19 @@ openssl rand -hex 32 | gh secret set STATUS_TOKEN    # then re-run the deploy wo
 
 The deploy rewrites `~/cdot-stations/env` and restarts the container with the new value; update anything that calls the API (importers). Old tokens stop working immediately. Rotate whenever someone who knew it leaves, or if it may have been exposed.
 
+## Live road conditions
+
+Traffic, road closures, construction and weather are real-time information that CDOT already publishes well, so this app **links to it instead of copying it**. The page has a **Live traffic, closures, construction & weather** panel (open on a computer, collapsed on a phone) with:
+- **[COtrip.org](https://www.cotrip.org/)**, CDOT's live map of traffic, closures, construction, weather and cameras;
+- the **COtrip Planner** app for [iPhone](https://apps.apple.com/us/app/cotrip-planner/id1582530559) and [Android](https://play.google.com/store/apps/details?id=crc.oneapp.co);
+- **CDOT on X**, [@ColoradoDOT](https://x.com/ColoradoDOT), where CDOT posts road and travel updates.
+
+Each station card, and each pin's popup, also has **Live road conditions nearby**, which opens COtrip centred on that pin (its saved position, if the team has moved it) with the traffic incidents, road closures, construction, weather alerts and weather radar layers already switched on. The link is built by `public/links.js` from COtrip's own layer names, which I checked against the live site (COtrip reported all five layers active).
+
+**Where the addresses came from.** COtrip's website and the two app store links are the ones COtrip's own site lists; the X account is the one CDOT's website links. No separate COtrip account on X was found, so none is linked. If COtrip changes its layer names or addresses, the links keep working but may open without some layers; `test/links.test.js` pins the exact addresses and fails if a link goes anywhere unexpected or loses `noopener`.
+
+**Why links and not live data in the app.** COtrip's "Data Feeds" help page no longer exists, and no public, documented feed or key was found, so there is nothing sanctioned to pull from. The data's owner is CDOT; if you want it inside this page (for example closures near each port as a list), the route is to ask CDOT's COtrip team for access first (see the roadmap).
+
 ## Moving a station's pin
 
 CDOT's port locations come from a layer last published in 2019, and ports do get relocated. If you have seen that a station is somewhere else, you can save its new position; the map then shows it there.
@@ -525,6 +538,8 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 - `POST /api/import` with `{"source":"csp","records":[{"station":"limon","status":"open"}]}` (max 500 records) returns `{updated, unchanged, skipped}`
 
 ## FAQ
+
+**Where do I see real-time traffic, closures, construction and weather?** In COtrip, CDOT's official source: the panel at the top of the page links to COtrip.org, the COtrip Planner app (iPhone and Android) and CDOT on X, and every station has a "Live road conditions nearby" link that opens COtrip on that spot. This app doesn't show that data itself; see "Live road conditions".
 
 **Is the open/closed status live?** No. Neither CSP nor CDOT publishes a status feed (checked CSP's Port of Entry page and COtrip), so a station shows `unknown` until someone reports it, and it is only as current as the last update or import. The card shows when it was updated and by whom or what.
 
@@ -750,6 +765,7 @@ Still open: what each tier includes beyond the seat count, whether there is a tr
 
 ### Later: features
 
+- **Conditions inside the page.** Show closures and incidents near each port as a list, instead of only linking out. Needs CDOT's permission and a documented feed or key from the COtrip team (none is public today; the contact details are in the next item). The links in "Live road conditions" cover the need until then.
 - **A real status source.** The biggest gap is that status is manual. Ask CSP's Port of Entry office and CDOT's COtrip team whether a feed or API exists (contact details from public listings, so verify them: CSP Port of Entry Branch, Golden office, 303-273-1870; COtrip, cdot_cotrip@state.co.us). If one exists it is a single adapter (see Contributing).
 - **Per-direction status.** Most ports have separate eastbound/westbound or northbound/southbound facilities that can open and close independently; today a port has one status.
 - **Email notifications.** Email when a station flips between open and closed, for people who don't use the app (phone notifications are covered under "Planned: mobile app").

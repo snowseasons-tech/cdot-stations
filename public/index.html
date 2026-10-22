@@ -39,6 +39,16 @@
   </aside>
   <main>
     <aside id="side">
+      <details id="conditions" class="conditions">
+        <summary>Live traffic, closures, construction &amp; weather</summary>
+        <p class="sub">Real-time road conditions come from CDOT, not from this app. Open them at the source:</p>
+        <ul>
+          <li><a href="https://www.cotrip.org/" target="_blank" rel="noopener noreferrer"><strong>COtrip.org</strong></a>: CDOT's live map of traffic, road closures, construction, weather and cameras.</li>
+          <li><strong>COtrip Planner app</strong>: <a href="https://apps.apple.com/us/app/cotrip-planner/id1582530559" target="_blank" rel="noopener noreferrer">iPhone</a> · <a href="https://play.google.com/store/apps/details?id=crc.oneapp.co" target="_blank" rel="noopener noreferrer">Android</a></li>
+          <li><a href="https://x.com/ColoradoDOT" target="_blank" rel="noopener noreferrer"><strong>CDOT on X</strong></a> (@ColoradoDOT): road and travel updates.</li>
+        </ul>
+        <p class="sub">Each station below also has a "Live road conditions nearby" link that opens COtrip on that spot.</p>
+      </details>
       <aside id="mover" class="mover" aria-label="Move a station's pin" hidden>
         <strong id="mover-title"></strong>
         <p class="sub">Tap the map where the station is now, or drag the orange pin.</p>
@@ -110,6 +120,7 @@
     <menu><button id="insp-close">Close</button></menu>
   </dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="links.js"></script>
   <script src="app.js"></script>
   <script src="install.js"></script>
   <script src="follow.js"></script>

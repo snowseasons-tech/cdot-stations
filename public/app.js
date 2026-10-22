@@ -56,6 +56,9 @@ function render() {
       el('div', { className: 'meta', textContent: `${s.highway} · MP ${[...new Set(s.locations.map((l) => l.milepost))].join(' / ')} · ${s.locations.map((l) => l.direction).join(', ')}` }),
     );
     if (s.locations.some((l) => l.correction)) card.append(el('div', { className: 'meta', textContent: 'Pin position corrected by the team (see map)' }));
+    const conditions = el('a', { href: window.conditionsLinks.cotripMapUrl(s.locations[0]), target: '_blank', rel: 'noopener noreferrer', textContent: 'Live road conditions nearby ↗' });
+    conditions.addEventListener('click', (e) => e.stopPropagation()); // don't also fly the map to the station
+    card.append(el('div', { className: 'meta' }, conditions));
     if (s.phone) card.append(el('div', { className: 'meta' }, el('a', { href: `tel:${s.phone}`, textContent: s.phone })));
     if (s.note) card.append(el('p', { className: 'note', textContent: s.note }));
     const i = s.inspections;
@@ -82,6 +85,7 @@ function render() {
     markers.get(s.id)?.forEach((m) => m.remove());
     const ms = s.locations.map((l) => {
       const popup = el('div', {}, el('strong', { textContent: s.name }), ` (${l.direction})`, el('br'), `${s.highway} MP ${l.milepost}`, el('br'), stateOf(s) + (s.note ? ` — ${s.note}` : ''));
+      popup.append(el('div', { className: 'meta' }, el('a', { href: window.conditionsLinks.cotripMapUrl(l), target: '_blank', rel: 'noopener noreferrer', textContent: 'Live road conditions nearby ↗' })));
       if (l.correction) {
         popup.append(el('div', { className: 'meta', textContent: `Pin moved by the team on ${new Date(l.correction.savedAt).toLocaleDateString()}${l.correction.note ? `: ${l.correction.note}` : ''}. CDOT lists ${l.original.lat.toFixed(5)}, ${l.original.lng.toFixed(5)}${l.correction.cdotAgrees ? ' (now matches)' : ''}.` }));
       }
@@ -262,3 +266,5 @@ $('insp-close').addEventListener('click', () => $('insp').close());
 
 load();
 setInterval(load, 60_000);
+
+if (innerWidth >= 760) $('conditions').open = true;

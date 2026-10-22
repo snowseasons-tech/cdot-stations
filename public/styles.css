@@ -66,3 +66,8 @@ html.standalone .update-btn { display:none; }
 .mv-coords { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
 #mv-info { margin:4px 0; }
 .mover .actions { flex-wrap:wrap; }
+
+.conditions { margin:12px 12px 0; padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); font-size:.9rem; }
+.conditions summary { cursor:pointer; font-weight:600; }
+.conditions ul { margin:6px 0; padding-left:18px; }
+.conditions li { margin:4px 0; }

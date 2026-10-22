@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
-import { loadStripeConfig, createCheckoutSession, fetchOffer, verifyWebhook, StripeError, PRODUCT } from '../stripe.js';
+import { loadStripeConfig, createCheckoutSession, fetchOffer, verifyWebhook, describeOffer, termOf, addMonths, StripeError, PRODUCT } from '../stripe.js';
 
 const SECRET = 'whsec_test123456';
 const ENV = {
@@ -113,4 +113,54 @@ test('fetchOffer reads the price from Stripe and refuses anything that is not an
     const s = await fakeStripe(t, () => ({ json: price }));
     await assert.rejects(fetchOffer(s.config), /active one-time price/, JSON.stringify(price));
   }
+});
+
+test('the offer settings are validated, and default to the lifetime Founding Member offer', () => {
+  const base = loadStripeConfig(ENV);
+  assert.deepEqual([base.offerName, base.accessMonths], ['Founding Member', null]);
+  const beta = loadStripeConfig({ ...ENV, JOIN_OFFER_NAME: 'Beta Member', JOIN_ACCESS_MONTHS: '12' });
+  assert.deepEqual([beta.offerName, beta.accessMonths], ['Beta Member', 12]);
+  for (const bad of ['0', '-3', '1.5', 'twelve', '121', '1e2', ' 12', '0x10', '12 ', '1000']) assert.throws(() => loadStripeConfig({ ...ENV, JOIN_ACCESS_MONTHS: bad }), /JOIN_ACCESS_MONTHS/, bad);
+  for (const bad of ['<b>Hi</b>', 'x'.repeat(61), 'a\nb', 'Beta; DROP']) assert.throws(() => loadStripeConfig({ ...ENV, JOIN_OFFER_NAME: bad }), /JOIN_OFFER_NAME/, bad);
+});
+
+test('describeOffer words the page from the settings: lifetime vs a number of months', () => {
+  const price = { amount: 500, currency: 'usd' };
+  const life = describeOffer({ offerName: 'Founding Member', accessMonths: null }, price);
+  assert.deepEqual([life.name, life.amount, life.months, life.term, life.extra], ['Founding Member', 500, null, 'One payment. No renewals.', 'Features added in the future.']);
+  assert.match(life.headline, /^Lifetime access/);
+  const beta = describeOffer({ offerName: 'Beta Member', accessMonths: 12 }, price);
+  assert.match(beta.headline, /^12 months of access/);
+  assert.match(beta.term, /12 months from your purchase.*does not renew automatically/);
+  assert.equal(describeOffer({ offerName: 'x', accessMonths: 1 }, price).headline.slice(0, 17), '1 month of access'); // singular
+});
+
+test('the term is stamped on the checkout session', async (t) => {
+  for (const [months, expected] of [[null, 'lifetime'], [12, '12']]) {
+    const requests = [];
+    const server = createServer(async (req, res) => { const c = []; for await (const x of req) c.push(x); requests.push(Buffer.concat(c).toString()); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ url: 'https://checkout.stripe.com/c/x' })); });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    t.after(() => { server.closeAllConnections(); server.close(); });
+    await createCheckoutSession({ ...loadStripeConfig(ENV), accessMonths: months, apiBase: `http://127.0.0.1:${server.address().port}` });
+    assert.equal(new URLSearchParams(requests[0]).get('metadata[access_months]'), expected);
+  }
+});
+
+test('termOf reads the term a payment was sold with and never guesses', () => {
+  const session = (v) => ({ metadata: { access_months: v } });
+  assert.deepEqual(termOf(session('lifetime')), { months: null, known: true });
+  assert.deepEqual(termOf(session('12')), { months: 12, known: true });
+  for (const bad of ['0', '-1', '1.5', 'forever', '', '999', undefined]) assert.equal(termOf(session(bad)).known, false, String(bad));
+  assert.equal(termOf({}).known, false);
+  assert.equal(termOf(undefined).known, false);
+});
+
+test('addMonths adds calendar months and clamps to the end of a shorter month', () => {
+  assert.equal(addMonths('2024-01-15T10:00:00.000Z', 12), '2025-01-15T10:00:00.000Z');
+  assert.equal(addMonths('2023-11-14T22:13:20.000Z', 12), '2024-11-14T22:13:20.000Z');
+  assert.equal(addMonths('2024-01-31T00:00:00.000Z', 1), '2024-02-29T00:00:00.000Z');   // leap year
+  assert.equal(addMonths('2023-01-31T00:00:00.000Z', 1), '2023-02-28T00:00:00.000Z');
+  assert.equal(addMonths('2024-02-29T00:00:00.000Z', 12), '2025-02-28T00:00:00.000Z');  // a leap day a year later
+  assert.equal(addMonths('2023-12-31T00:00:00.000Z', 2), '2024-02-29T00:00:00.000Z');   // across the year end
+  assert.equal(addMonths('2024-10-31T12:30:00.000Z', 1), '2024-11-30T12:30:00.000Z');
 });

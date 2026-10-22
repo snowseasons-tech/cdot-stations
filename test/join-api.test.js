@@ -64,7 +64,7 @@ const sign = (body, secret = SECRET, t = Math.floor(Date.now() / 1000)) => `t=${
 const event = (over = {}, session = {}) => JSON.stringify({
   id: 'evt_1', type: 'checkout.session.completed',
   data: { object: { id: 'cs_test_A1', mode: 'payment', payment_status: 'paid', amount_total: 29900, currency: 'usd', created: 1_700_000_000,
-    customer_details: { email: 'Buyer@Example.COM ', name: 'A Buyer' }, metadata: { product: PRODUCT }, ...session } }, ...over,
+    customer_details: { email: 'Buyer@Example.COM ', name: 'A Buyer' }, metadata: { product: PRODUCT, access_months: 'lifetime' }, ...session } }, ...over,
 });
 const webhook = (ctx, body, signature = sign(body)) => ctx.pub('/api/stripe-webhook', { method: 'POST', headers: { 'stripe-signature': signature, 'content-type': 'application/json' }, body });
 
@@ -91,7 +91,8 @@ test('the public hostname serves only the sales pages and Stripe\'s webhook; the
   const page = await ctx.pub('/join');
   assert.equal(page.status, 200);
   assert.match(page.headers['content-type'], /text\/html/);
-  assert.match(page.text, /Founding Member/);
+  assert.match(page.text, /<h1 id="name">/);                                                       // the name is filled in from the settings
+  assert.doesNotMatch(page.text, /Founding Member|Lifetime|lifetime/);                              // the page itself makes no fixed promise
   assert.equal((await ctx.pub('/join/thanks')).status, 200);
   assert.equal((await ctx.pub('/join/join.js')).status, 200);
   assert.equal((await ctx.pub('/join/join.css')).status, 200);
@@ -106,7 +107,9 @@ test('the public hostname serves only the sales pages and Stripe\'s webhook; the
 test('the offer shows the price Stripe has, and checkout is unavailable (not wrong) when Stripe is down', async (t) => {
   const ctx = await start(t);
   const offer = (await ctx.pub('/api/offer')).json();
-  assert.deepEqual([offer.name, offer.amount, offer.currency, offer.trackerUrl], ['Founding Member', 29900, 'usd', 'https://tracker.example.com']);
+  assert.deepEqual([offer.name, offer.amount, offer.currency, offer.trackerUrl, offer.months], ['Founding Member', 29900, 'usd', 'https://tracker.example.com', null]);
+  assert.match(offer.headline, /^Lifetime access to the CDOT Inspection Stations tracker/);
+  assert.equal(offer.term, 'One payment. No renewals.');
   assert.equal(offer.termsUrl, 'https://example.com/terms');
   await ctx.pub('/api/offer');
   assert.equal(ctx.stripe.requests.filter((r) => r.startsWith('GET /v1/prices')).length, 1); // cached for ten minutes
@@ -251,4 +254,66 @@ test('the sales pages are self-contained, send people only to Stripe, and contai
   for (const tag of html.match(/<a [^>]*target="_blank"[^>]*>/g) ?? []) assert.match(tag, /rel="noopener noreferrer"/);
   assert.match(html, /not run by, or affiliated with, CDOT/);                              // the honest framing stays on the page
   assert.match(html, /<button id="buy" type="button" disabled>/);                          // can't be pressed before the agreement is ticked
+});
+
+// ---- a time-limited offer (the $5 beta): the settings drive the wording, the checkout, and each purchase's expiry
+const BETA = { ...ENV, JOIN_OFFER_NAME: 'Beta Member', JOIN_ACCESS_MONTHS: '12' };
+
+test('a 12-month beta describes itself as one, never promises lifetime, and says it does not auto-renew', async (t) => {
+  const stripe = await fakeStripe(t);
+  const dir = await mkdtemp(join(tmpdir(), 'cdot-'));
+  t.after(() => rm(dir, { recursive: true }));
+  const server = await createApp({
+    statusFile: join(dir, 's.json'), subscriptionsFile: join(dir, 'u.json'), membersFile: join(dir, 'm.json'), token: 'secret', pushConfig: null,
+    stripeConfig: { ...loadStripeConfig(BETA), apiBase: stripe.apiBase },
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const port = server.address().port;
+  const get = (path, method = 'GET', headers = {}, body) => new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method, headers: { host: JOIN_HOST, ...headers } }, (res) => {
+      const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString() }));
+    });
+    req.on('error', reject); req.end(body);
+  });
+
+  const offer = JSON.parse((await get('/api/offer')).text);
+  assert.deepEqual([offer.name, offer.months, offer.amount], ['Beta Member', 12, 29900]);
+  assert.match(offer.headline, /^12 months of access/);
+  assert.match(offer.term, /12 months from your purchase.*does not renew automatically.*not be charged again/);
+  assert.match(offer.extra, /during your 12 months/);
+  for (const text of Object.values(offer).filter((v) => typeof v === 'string')) assert.doesNotMatch(text, /lifetime|all future/i, text);
+
+  // the term is stamped on the checkout session, so each purchase keeps the term it was sold with
+  await get('/api/checkout', 'POST', { 'content-type': 'application/json' }, JSON.stringify({ agreed: true }));
+  assert.ok(stripe.requests.some((r) => r.startsWith('POST /v1/checkout/sessions')));  // (the stamped term itself is checked in stripe.test.js)
+});
+
+test('a purchase carries its own term into an expiry date, and expired members are the ones to take off the sign-in list', async (t) => {
+  const ctx = await start(t);
+  const list = async (query = '') => (await ctx.call(`/api/members${query}`, { headers: ctx.auth })).json().members;
+  const paid = (id, months, created) => event({ id: `evt_${id}` }, { id: `cs_test_${id}`, created, metadata: { product: PRODUCT, access_months: months } });
+
+  await webhook(ctx, paid('LIFE', 'lifetime', 1_700_000_000));
+  await webhook(ctx, paid('YEAR', '12', 1_700_000_000));                    // paid 2023-11-14, expires 2024-11-14
+  await webhook(ctx, paid('NEW', '12', Math.floor(Date.now() / 1000)));     // paid just now, not expired
+  await webhook(ctx, paid('ODD', 'forever', 1_700_000_000));                // a term we don't recognise
+  const byId = Object.fromEntries((await list()).map((m) => [m.sessionId, m]));
+  assert.deepEqual([byId.cs_test_LIFE.months, byId.cs_test_LIFE.expiresAt, byId.cs_test_LIFE.needsReview], [null, null, false]);
+  assert.deepEqual([byId.cs_test_YEAR.months, byId.cs_test_YEAR.expiresAt], [12, '2024-11-14T22:13:20.000Z']);
+  assert.equal(byId.cs_test_ODD.needsReview, true);                          // never guessed: flagged for a person
+  assert.equal(byId.cs_test_ODD.expiresAt, null);
+
+  // nobody is "expired" until they have been given access
+  assert.equal((await list('?expired=1')).length, 0);
+  for (const id of ['LIFE', 'YEAR', 'NEW']) await ctx.call(`/api/members/cs_test_${id}/granted`, { method: 'POST', headers: ctx.auth });
+  assert.deepEqual((await list('?expired=1')).map((m) => m.sessionId), ['cs_test_YEAR']);   // lifetime and not-yet-expired are left alone
+
+  const removed = await ctx.call('/api/members/cs_test_YEAR/removed', { method: 'POST', headers: ctx.auth });
+  assert.equal(removed.status, 200);
+  assert.deepEqual([removed.json().accessGranted, typeof removed.json().removedAt], [false, 'string']);
+  assert.equal((await list('?expired=1')).length, 0);                                       // done, so no longer listed
+  assert.ok(!(await list('?pending=1')).some((m) => m.sessionId === 'cs_test_YEAR'));      // and not waiting to be added again
+  assert.equal((await ctx.call('/api/members/cs_test_YEAR/removed', { method: 'POST' })).status, 401);
+  assert.equal((await ctx.call('/api/members/cs_test_NOPE/removed', { method: 'POST', headers: ctx.auth })).status, 404);
 });

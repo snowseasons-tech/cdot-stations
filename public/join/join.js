@@ -11,6 +11,11 @@
       const res = await fetch('/api/offer');
       if (!res.ok) throw new Error(String(res.status));
       const offer = await res.json();
+      document.title = `${offer.name}: CDOT Inspection Stations`;
+      $('name').textContent = offer.name;
+      $('headline').textContent = offer.headline;
+      $('term').textContent = offer.term;
+      $('extra').textContent = offer.extra;
       $('price').textContent = new Intl.NumberFormat('en-US', { style: 'currency', currency: offer.currency.toUpperCase() }).format(offer.amount / 100);
       for (const [id, url] of [['terms', offer.termsUrl], ['refund', offer.refundUrl], ['privacy', offer.privacyUrl]]) {
         if (isHttps(url)) $(id).href = url;

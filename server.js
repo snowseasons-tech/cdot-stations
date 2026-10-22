@@ -9,7 +9,7 @@ import { summarize } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
 import { FailureLimiter, RateLimiter, tokenMatches } from './auth.js';
 import { Members } from './members.js';
-import { loadStripeConfig, createCheckoutSession, fetchOffer, verifyWebhook, StripeError, PRODUCT } from './stripe.js';
+import { loadStripeConfig, createCheckoutSession, fetchOffer, describeOffer, termOf, verifyWebhook, StripeError, PRODUCT } from './stripe.js';
 import { Subscriptions, LimitReached, createNotifier, createWebPushSender, loadPushConfig, validateRequest, isPushEndpoint } from './push.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -134,7 +134,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       if (pathname === '/api/offer') {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
         try {
-          return json(res, 200, { name: 'Founding Member', ...(await getOffer()), termsUrl: stripeConfig.termsUrl, refundUrl: stripeConfig.refundUrl, privacyUrl: stripeConfig.privacyUrl, trackerUrl: stripeConfig.trackerUrl });
+          return json(res, 200, { ...describeOffer(stripeConfig, await getOffer()), termsUrl: stripeConfig.termsUrl, refundUrl: stripeConfig.refundUrl, privacyUrl: stripeConfig.privacyUrl, trackerUrl: stripeConfig.trackerUrl });
         } catch (e) {
           console.error(`offer unavailable: ${e.message}`);
           return json(res, 503, { error: 'checkout is unavailable right now' });
@@ -171,7 +171,9 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         const session = event.data?.object;
         if (FULFIL_EVENTS.has(event.type) && session?.mode === 'payment' && session.payment_status === 'paid' && session.metadata?.product === PRODUCT && typeof session.id === 'string') {
           try {
+            const term = termOf(session);
             await members.recordPurchase({
+              months: term.months, termKnown: term.known,
               sessionId: session.id, eventId: event.id, email: session.customer_details?.email ?? session.customer_email,
               name: session.customer_details?.name, amount: session.amount_total, currency: session.currency,
               paidAt: new Date((Number(session.created) || Date.now() / 1000) * 1000).toISOString(),
@@ -188,14 +190,14 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       if (pathname === '/api/members') {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
         if (!authorize(req, res)) return;
-        const only = new URL(req.url, 'http://x').searchParams.get('pending') === '1';
-        return json(res, 200, { members: only ? members.pending() : members.list() });
+        const q = new URL(req.url, 'http://x').searchParams;
+        return json(res, 200, { members: q.get('expired') === '1' ? members.expired() : q.get('pending') === '1' ? members.pending() : members.list() });
       }
-      const granted = pathname.match(/^\/api\/members\/(cs_[A-Za-z0-9_]+)\/granted$/);
+      const granted = pathname.match(/^\/api\/members\/(cs_[A-Za-z0-9_]+)\/(granted|removed)$/);
       if (granted) {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
         if (!authorize(req, res)) return;
-        const member = await members.markGranted(granted[1]);
+        const member = await (granted[2] === 'granted' ? members.markGranted(granted[1]) : members.markRemoved(granted[1]));
         return member ? json(res, 200, member) : json(res, 404, { error: 'no such member' });
       }
       const m = pathname.match(/^\/api\/stations(?:\/([a-z0-9-]+)(\/history|\/status|\/inspections)?)?$/);

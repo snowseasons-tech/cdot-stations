@@ -88,6 +88,8 @@ jobs:
           JOIN_PRIVACY_URL: ${{ vars.JOIN_PRIVACY_URL }}
           JOIN_TRACKER_URL: ${{ vars.JOIN_TRACKER_URL }}
           ALLOW_LIVE: ${{ vars.ALLOW_LIVE }}
+          JOIN_OFFER_NAME: ${{ vars.JOIN_OFFER_NAME }}
+          JOIN_ACCESS_MONTHS: ${{ vars.JOIN_ACCESS_MONTHS }}
         run: |
           [ -n "$STATUS_TOKEN" ] || { echo "::error::STATUS_TOKEN secret is not set"; exit 1; }
           # Push notifications need all three VAPID values, or none (then they are simply off).
@@ -116,6 +118,8 @@ jobs:
               printf 'JOIN_BASE_URL=%s\nJOIN_TERMS_URL=%s\nJOIN_REFUND_URL=%s\nJOIN_PRIVACY_URL=%s\n' "$JOIN_BASE_URL" "$JOIN_TERMS_URL" "$JOIN_REFUND_URL" "$JOIN_PRIVACY_URL"
               [ -z "$JOIN_TRACKER_URL" ] || printf 'JOIN_TRACKER_URL=%s\n' "$JOIN_TRACKER_URL"
               [ -z "$ALLOW_LIVE" ] || printf 'ALLOW_LIVE=%s\n' "$ALLOW_LIVE"
+              [ -z "$JOIN_OFFER_NAME" ] || printf 'JOIN_OFFER_NAME=%s\n' "$JOIN_OFFER_NAME"
+              [ -z "$JOIN_ACCESS_MONTHS" ] || printf 'JOIN_ACCESS_MONTHS=%s\n' "$JOIN_ACCESS_MONTHS"
             fi
           } > ~/cdot-stations/env
 

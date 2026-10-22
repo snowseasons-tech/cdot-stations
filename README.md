@@ -112,7 +112,7 @@ scripts/               ─ standalone; none import server code
 | `data/inspection-locations.json` | `{ source, fetchedAt, through, coverage, locations: [{ id, name, kind, lat, lng, levels }] }` |
 | `status.json` (volume) | `{ current: { <id>: { status, note, updatedAt, source } }, history: [ ... last 1000 ... ] }` |
 | `subscriptions.json` (volume) | `{ subscriptions: { <hash>: { endpoint, keys, stations: ['all'] or [ids], createdAt, updatedAt } } }`, one per phone (max 500) |
-| `members.json` (volume) | `{ members: { <stripe session id>: { email, name, amount, currency, paidAt, needsReview, accessGranted, grantedAt } }, events: [ ...last 500 Stripe event ids... ] }`, one per purchase |
+| `members.json` (volume) | `{ members: { <stripe session id>: { email, name, amount, currency, paidAt, months, expiresAt, needsReview, accessGranted, grantedAt, removedAt } }, events: [ ...last 500 Stripe event ids... ] }`, one per purchase |
 
 A station's `id` (a slug of its name) is the key everywhere: inspections and saved statuses refer to it, which is why the sync refuses to drop a station silently.
 
@@ -241,6 +241,7 @@ Benchmark a temporary instance, not the production container, and stop it by PID
 | `SUBSCRIPTIONS_FILE` | `data/subscriptions.json` | Where push followers are stored |
 | `MEMBERS_FILE` | `data/members.json` | Where membership purchases are stored |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_FOUNDING`, `JOIN_BASE_URL`, `JOIN_TERMS_URL`, `JOIN_REFUND_URL`, `JOIN_PRIVACY_URL` | unset | Turn on selling memberships (all seven or none; see Selling memberships) |
+| `JOIN_OFFER_NAME`, `JOIN_ACCESS_MONTHS` | `Founding Member`, unset (lifetime) | The offer's name, and its length in months for a time-limited offer (see Selling memberships) |
 | `JOIN_TRACKER_URL`, `ALLOW_LIVE` | unset | Optional: the tracker's address shown on the thank-you page; `ALLOW_LIVE=1` permits a live Stripe key |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | unset | Turn on push notifications (all three or none; see Notifications) |
 | `TRUST_PROXY` | unset | `1` = take the client address from the proxy's `X-Real-IP` (see Security) |
@@ -383,7 +384,7 @@ Then deploy (push a change, or re-run the workflow). The deploy writes the value
 
 ## Selling memberships
 
-A **Founding Member** membership (one payment, lifetime access to the tracker) can be sold from a public page, `/join`, paid through Stripe Checkout. **It is built and tested but switched off**: nothing sells until you add the Stripe settings below, and it has so far been exercised only against a fake Stripe in tests (no real Stripe account was involved). Try it in Stripe's test mode before taking any real money.
+A one-time membership to the tracker, either **lifetime** or **for a set number of months** (for example a $5, 12-month beta), can be sold from a public page, `/join`, paid through Stripe Checkout. **It is built and tested but switched off**: nothing sells until you add the Stripe settings below, and it has so far been exercised only against a fake Stripe in tests (no real Stripe account was involved). Try it in Stripe's test mode before taking any real money.
 
 ```
 buyer ─► /join (public) ─► Stripe Checkout (pays) ─► Stripe tells /api/stripe-webhook (signed) ─► recorded in members.json
@@ -417,21 +418,49 @@ Do all of this in Stripe's **test mode** first.
 5. **Try a test purchase** at `https://join.snowseasonstech.net/join` with Stripe's test card `4242 4242 4242 4242` (any future date, any CVC). In the Stripe dashboard the webhook delivery should show `200`, and `npm run members -- pending` on the server should list the test buyer.
 6. **Going live** is a separate, deliberate step: create the live price and a live webhook endpoint, replace the secrets with the live key and live signing secret, and set `gh variable set ALLOW_LIVE --body 1`. Without `ALLOW_LIVE=1` the server refuses a live key.
 
+### Choosing the offer: lifetime, or a time-limited beta
+
+What is sold is decided by three things, and the page's wording follows them, so it can't promise something different from what is sold:
+
+| Setting | What it does |
+|---|---|
+| The Stripe price | The amount. Create a **one-time** price in Stripe (for $5: `5.00 USD`) and set `STRIPE_PRICE_FOUNDING` to its id (the setting keeps its old name). The page reads the amount from Stripe. |
+| `JOIN_ACCESS_MONTHS` | Leave **unset** for lifetime access. Set a whole number of months (1 to 120, digits only) for a time-limited offer, e.g. `12`. |
+| `JOIN_OFFER_NAME` | The name shown on the page and receipt. Default `Founding Member`; for the beta use `Beta Member`. |
+
+**The $5 beta, 12 months**, in test mode first:
+```bash
+# Stripe: create a product "Beta Member" with a one-time price of $5.00 USD, then:
+gh variable set STRIPE_PRICE_FOUNDING --body price_...
+gh variable set JOIN_OFFER_NAME --body "Beta Member"
+gh variable set JOIN_ACCESS_MONTHS --body 12
+# deploy
+```
+The page then says "12 months of access", "One payment covers 12 months from your purchase. It does not renew automatically and you will not be charged again", and "Updates and features added during your 12 months", and never mentions lifetime. For the lifetime offer, remove `JOIN_ACCESS_MONTHS` (and set the name and price back).
+
+**Each purchase keeps the term it was sold with.** The term is stamped on the Stripe checkout session, so changing the setting later does not change what earlier buyers were promised. Each purchase gets an expiry date (calendar months after payment, so 31 January plus 1 month is the end of February). A payment whose term isn't recognised is recorded and flagged **NEEDS REVIEW**, never guessed.
+
+**Nothing expires by itself.** The tracker's sign-in list is Cloudflare's, so when someone's months are up you take their email off it: `npm run members -- expired` lists them, then `npm run members -- removed <id>` records it. Check it now and then (for a 12-month beta, once a month is plenty). Your terms and the Stripe product description should say the same thing as the page: 12 months from purchase, no automatic renewal.
+
+**On a $5 price**, Stripe's fee on a US card is about 2.9% plus 30 cents, so roughly $4.55 reaches you. A refund usually does not return Stripe's fee.
+
 ### Day to day
 
 ```bash
 cd ~/Documents/americantree/cdot-stations
 STATUS_TOKEN=$(cat ~/.cdot-stations-deploy/status_token) npm run members -- pending   # who is waiting
 # add each email to the Cloudflare Access policy (Zero Trust, Access controls, Applications, the tracker, its Allow policy), then:
-STATUS_TOKEN=... npm run members -- grant cs_live_...                                 # mark as done
+STATUS_TOKEN=... npm run members -- grant cs_live_...                                 # mark as added
+STATUS_TOKEN=... npm run members -- expired                                           # time-limited offers: whose months are up
+STATUS_TOKEN=... npm run members -- removed cs_live_...                               # mark as taken off the list
 ```
 
-**Refunds and chargebacks are not automatic.** Refunding in Stripe does not remove anyone's access: take their email off the Access list yourself.
+**Refunds, chargebacks and expiry are not automatic.** Refunding in Stripe does not remove anyone's access, and neither does a membership running out: take their email off the Access list yourself, then mark them with `npm run members -- removed <id>`.
 
 ### Before you sell, things only you can decide
 
 - **Your terms, refund policy and privacy policy.** The page links to the three addresses you set; they must cover this product. The store's existing pages are written for the store, so check them.
-- **What "lifetime" and "all future features" mean.** The page says lifetime access and "features added in the future". That is an open-ended promise: define it in your terms (for example, "for as long as the service is offered"). The tracker runs on one home server with no uptime guarantee (see Architecture), and its open/closed status depends on people entering it, so be careful what you promise.
+- **What "lifetime" and "features added in the future" mean (the lifetime offer).** The lifetime wording is an open-ended promise, which is why a fixed-length beta is the safer first offer: define it in your terms (for example, "for as long as the service is offered"). The tracker runs on one home server with no uptime guarantee (see Architecture), and its open/closed status depends on people entering it, so be careful what you promise.
 - **Tax and business details** for selling to customers (Stripe Tax is available in the Stripe dashboard).
 
 ## Backups
@@ -813,7 +842,7 @@ Still open: what each tier includes beyond the seat count, whether there is a tr
 
 ### Later: features
 
-- **Grant access automatically after a purchase.** Today a person adds each buyer's email to the Cloudflare Access list; the Cloudflare API can do it from the webhook, but that puts a Cloudflare credential on the server, so it is a deliberate step. Refunds could remove the email the same way (handle `charge.refunded`).
+- **Grant and remove access automatically.** Today a person adds each buyer's email to the Cloudflare Access list and removes it when a membership expires or is refunded; the Cloudflare API can do both (from the webhook, from `charge.refunded`, and on a daily expiry check), but that puts a Cloudflare credential on the server, so it is a deliberate step.
 - **Conditions inside the page.** Show closures and incidents near each port as a list, instead of only linking out. Needs CDOT's permission and a documented feed or key from the COtrip team (none is public today; the contact details are in the next item). The links in "Live road conditions" cover the need until then.
 - **A real status source.** The biggest gap is that status is manual. Ask CSP's Port of Entry office and CDOT's COtrip team whether a feed or API exists (contact details from public listings, so verify them: CSP Port of Entry Branch, Golden office, 303-273-1870; COtrip, cdot_cotrip@state.co.us). If one exists it is a single adapter (see Contributing).
 - **Per-direction status.** Most ports have separate eastbound/westbound or northbound/southbound facilities that can open and close independently; today a port has one status.

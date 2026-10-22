@@ -40,8 +40,17 @@ export function loadStripeConfig(env = process.env) {
 
   if (env.JOIN_TRACKER_URL && !isHttps(env.JOIN_TRACKER_URL)) throw new Error('JOIN_TRACKER_URL must be an https address');
 
+  // The offer is described from these two optional settings, so the wording on the page always matches what is sold.
+  const offerName = env.JOIN_OFFER_NAME ?? 'Founding Member';
+  if (!/^[\p{L}\p{N} .,'&:-]{1,60}$/u.test(offerName)) throw new Error('JOIN_OFFER_NAME must be 1-60 letters, digits, spaces or simple punctuation');
+  let accessMonths = null; // null = lifetime
+  if (env.JOIN_ACCESS_MONTHS) {
+    accessMonths = /^\d{1,3}$/.test(env.JOIN_ACCESS_MONTHS) ? Number(env.JOIN_ACCESS_MONTHS) : NaN; // plain digits only: not '1e2', ' 12' or '0x10'
+    if (!Number.isInteger(accessMonths) || accessMonths < 1 || accessMonths > 120) throw new Error('JOIN_ACCESS_MONTHS must be a whole number of months from 1 to 120 (leave it unset for lifetime access)');
+  }
+
   return {
-    trackerUrl: env.JOIN_TRACKER_URL ?? null,
+    trackerUrl: env.JOIN_TRACKER_URL ?? null, offerName, accessMonths,
     secretKey, webhookSecret: env.STRIPE_WEBHOOK_SECRET, priceId: env.STRIPE_PRICE_FOUNDING, live,
     baseUrl: base.origin, joinHost: base.host,
     termsUrl: env.JOIN_TERMS_URL, refundUrl: env.JOIN_REFUND_URL, privacyUrl: env.JOIN_PRIVACY_URL,
@@ -76,6 +85,7 @@ export async function createCheckoutSession(config, fetchImpl = fetch) {
     success_url: `${config.baseUrl}/join/thanks`,
     cancel_url: `${config.baseUrl}/join`,
     'metadata[product]': PRODUCT,
+    'metadata[access_months]': config.accessMonths ? String(config.accessMonths) : 'lifetime', // this purchase keeps the term it was sold with
   }, fetchImpl);
   if (typeof session.url !== 'string' || !isHttps(session.url)) throw new StripeError('Stripe did not return a checkout address', 502);
   return session.url;
@@ -111,4 +121,36 @@ export function verifyWebhook(rawBody, signatureHeader, secret, { now = Date.now
   });
   if (!valid) throw new StripeError('signature does not match', 400);
   try { return JSON.parse(rawBody.toString('utf8')); } catch { throw new StripeError('body is not JSON', 400); }
+}
+
+const monthsLabel = (months) => `${months} month${months === 1 ? '' : 's'}`;
+
+// What the sales page says, derived from the settings so it can't disagree with what is sold.
+export function describeOffer(config, price) {
+  const months = config.accessMonths;
+  const what = "the CDOT Inspection Stations tracker: Colorado's commercial vehicle ports of entry on one map, with status, inspection numbers and notifications.";
+  return {
+    name: config.offerName, amount: price.amount, currency: price.currency, months,
+    headline: months ? `${monthsLabel(months)} of access to ${what}` : `Lifetime access to ${what}`,
+    term: months ? `One payment covers ${monthsLabel(months)} from your purchase. It does not renew automatically and you will not be charged again.` : 'One payment. No renewals.',
+    extra: months ? `Updates and features added during your ${monthsLabel(months)}.` : 'Features added in the future.',
+  };
+}
+
+// The term a paid session was sold with: a whole number of months, 'lifetime', or null when the tag is missing or odd.
+export function termOf(session) {
+  const value = session?.metadata?.access_months;
+  if (value === 'lifetime') return { months: null, known: true };
+  const months = Number(value);
+  return Number.isInteger(months) && months >= 1 && months <= 120 ? { months, known: true } : { months: null, known: false };
+}
+
+// Calendar months after a date (UTC), clamped to the end of a shorter month: 31 Jan + 1 month = 28 or 29 Feb.
+export function addMonths(isoDate, months) {
+  const d = new Date(isoDate);
+  const day = d.getUTCDate();
+  const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1, d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  return target.toISOString();
 }

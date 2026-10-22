@@ -37,7 +37,7 @@ Set `STATUS_TOKEN` before exposing this beyond localhost.
 
 ## Deploy
 
-Pushing to `main` runs `.github/workflows/deploy.yml`: tests first, then it builds the Docker image and publishes it to GitHub Container Registry as `ghcr.io/snowseasons-tech/cdot-stations` (tags `latest` and the commit SHA). Pull requests only run the tests. The package is private by default, so the host needs a token with `read:packages` to pull it.
+Pushing to `main` runs `.github/workflows/deploy.yml`: tests first, then it builds the Docker image and publishes it to GitHub Container Registry as `ghcr.io/snowseasons-tech/cdot-stations` (tags `latest` and the commit SHA). Before pushing, the workflow boots the built image and checks it serves the app and enforces the token (`scripts/smoke-test-image.sh`), so a broken image is never published. Pull requests only run the tests. The package is private by default, so the host needs a token with `read:packages` to pull it.
 
 ```bash
 docker run -d --name cdot-stations --restart unless-stopped -p 3000:3000 \

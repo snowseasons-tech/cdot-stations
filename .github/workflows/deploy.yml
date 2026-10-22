@@ -38,6 +38,15 @@ jobs:
           tags: |
             type=raw,value=latest
             type=sha
+      # Build once locally and boot it before anything is pushed, so a broken image never reaches the registry.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: cdot-smoke:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: bash scripts/smoke-test-image.sh cdot-smoke:ci
       - uses: docker/build-push-action@v6
         with:
           context: .

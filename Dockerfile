@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
     STATUS_FILE=/var/lib/cdot/status.json
 
 WORKDIR /app
-COPY package.json server.js store.js importer.js inspections.js ./
+COPY package.json *.js ./
 COPY adapters ./adapters
 COPY public ./public
 COPY data/stations.json data/inspections.json ./data/

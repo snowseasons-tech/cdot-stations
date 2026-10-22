@@ -84,6 +84,28 @@ bash scripts/install-nginx-site.sh   # sudo: copies the site into sites-availabl
 
 It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open **http://192.168.0.20:8080** (the server's wired address; the Wi-Fi address `192.168.0.91` works too). Both come from DHCP and can change, so a reservation in your router keeps them stable. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`).
 
+## Backups
+
+Station status and history live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
+
+`scripts/backup-status.sh` runs **daily at 03:30 server time** from cron (installed with `bash scripts/install-backup-cron.sh`; remove it with `crontab -e`). Each run:
+
+1. reads `status.json` from the running container (the app writes it atomically, so the copy is always consistent) and refuses to back up anything that isn't valid status data;
+2. saves a timestamped copy in `~/cdot-stations/backups/` unless nothing changed, keeping at least the 7 newest and deleting the rest after 30 days;
+3. commits the same file to the private repo [snowseasons-tech/cdot-stations-backup](https://github.com/snowseasons-tech/cdot-stations-backup), so you also survive losing the machine, and git keeps every version.
+
+Output goes to `~/cdot-stations/backup.log`. A failed push leaves the local copy in place and the next run retries. The off-site push uses the stored `gh` login, so if that login expires the log will show the failure.
+
+To restore (it saves the current data first as `pre-restore-<time>.json`, replaces `status.json`, and restarts the container, since the app only reads it at startup):
+
+```bash
+bash scripts/restore-status.sh ~/cdot-stations/backups/status-<time>.json
+# or an older version from the backup repo:
+git -C ~/cdot-stations/backup-repo show <commit>:status.json > /tmp/status.json && bash scripts/restore-status.sh /tmp/status.json
+```
+
+`bash test/e2e/backup.sh` exercises backup, pruning, refusal of corrupt files and restore against a throwaway container and a local git repo (needs Docker; not part of `npm test`).
+
 ## Data refresh
 
 `.github/workflows/refresh-data.yml` runs **every Monday at 06:17 UTC** (and on demand from the Actions tab, or with `gh workflow run refresh-data.yml`). It re-fetches CDOT's port locations and FMCSA's inspection data, runs the tests, and, only if the data actually changed (the fetch timestamp alone doesn't count), commits it to `main` as `github-actions[bot]` and dispatches the normal test → publish → deploy pipeline. A run with no changes ends quietly. Each run's summary shows what changed.

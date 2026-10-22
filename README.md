@@ -225,6 +225,10 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 - `PUT /api/stations/:id/status` with `{"status":"open|closed|unknown","note":"..."}`
 - `POST /api/import` with `{"source":"csp","records":[{"station":"limon","status":"open"}]}` (max 500 records) returns `{updated, unchanged, skipped}`
 
+## Changes
+
+See [CHANGELOG.md](CHANGELOG.md). Add an entry under *Unreleased* when you change something users or operators would notice.
+
 ## Ideas for later
 
 A real CSP/Drivewyze/PrePass adapter if a feed becomes available, per-direction status, and SQLite/Postgres if multiple writers are needed.

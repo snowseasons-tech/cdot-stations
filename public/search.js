@@ -5,6 +5,26 @@
   const dialog = $('search');
   if (!dialog) return;
 
+  const loaded = []; // every result shown so far, kept so it can be exported
+
+  const COLUMNS = [
+    ['Date', (r) => r.date], ['Time', (r) => r.time], ['Place', (r) => r.place], ['Level', (r) => r.level],
+    ['Level name', (r) => r.levelName], ['Violations', (r) => r.violations], ['Out of service', (r) => r.oos.total],
+    ['Vehicle OOS', (r) => r.oos.vehicle], ['Driver OOS', (r) => r.oos.driver], ['Hazmat OOS', (r) => r.oos.hazmat],
+    ['Carrier', (r) => r.carrier], ['City', (r) => r.city], ['State', (r) => r.state], ['DOT number', (r) => r.dot],
+    ['Inspection ID', (r) => r.id],
+  ];
+
+  // One CSV cell. Text starting with = + - @ (or a tab/CR) would be run as a formula by Excel and Sheets, and carrier
+  // names are other people's text, so those get a leading apostrophe. Quotes are doubled and the cell is quoted.
+  const cell = (v) => {
+    let t = v === null || v === undefined ? '' : String(v);
+    if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+    return `"${t.replaceAll('"', '""')}"`;
+  };
+  const toCsv = (rows) => [COLUMNS.map(([name]) => cell(name)).join(','), ...rows.map((r) => COLUMNS.map(([, get]) => cell(get(r))).join(','))].join('\r\n') + '\r\n';
+  if (typeof globalThis.__searchExports === 'object') globalThis.__searchExports.toCsv = toCsv; // lets the tests reach it
+
   let latest = 0; // a slower, older answer must not overwrite a newer one
   let query = null;
   let shown = 0;
@@ -49,8 +69,9 @@
     const mine = ++latest;
     const p = offset === 0 ? params(0) : query;
     if (offset > 0) p.set('offset', String(offset));
-    if (offset === 0) { query = p; shown = 0; $('s-results').replaceChildren(); }
+    if (offset === 0) { query = p; shown = 0; loaded.length = 0; $('s-results').replaceChildren(); }
     $('s-more').hidden = true;
+    $('s-csv').hidden = true;
     $('s-status').textContent = 'Searching...';
     $('s-go').disabled = true;
     try {
@@ -64,6 +85,8 @@
       if (!res.ok) throw new Error(String(res.status));
       $('s-results').append(...body.results.map(row));
       shown += body.results.length;
+      loaded.push(...body.results);
+      $('s-csv').hidden = !loaded.length;
       $('s-status').textContent = shown ? `Showing ${shown} inspection${shown === 1 ? '' : 's'}, newest first.` : 'No inspections matched.';
       $('s-more').hidden = !body.hasMore || offset + body.pageSize > 1000;
       if (body.hasMore && offset + body.pageSize > 1000) $('s-status').textContent += ' Narrow the dates to see older ones.';
@@ -79,4 +102,12 @@
   $('s-close').addEventListener('click', () => dialog.close());
   $('search-form').addEventListener('submit', (event) => { event.preventDefault(); run(0); });
   $('s-more').addEventListener('click', () => run(shown));
+  $('s-csv').addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob(['\ufeff', toCsv(loaded)], { type: 'text/csv;charset=utf-8' })); // BOM so Excel reads UTF-8
+    const a = el('a', { href: url, download: `inspections-${new Date().toISOString().slice(0, 10)}.csv` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
 })();

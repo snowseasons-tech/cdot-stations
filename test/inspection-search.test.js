@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { createApp } from '../server.js';
 import { parseSearch, buildUrl, shape, createSearcher, SearchError, PAGE_SIZE } from '../inspection-search.js';
 import { RateLimiter } from '../auth.js';
+import vm from 'node:vm';
 
 const params = (o) => new URLSearchParams(o);
 const row = (n, extra = {}) => ({
@@ -121,8 +122,30 @@ test('the page wires the search in: script loaded after app.js, cached by the se
   const read = (f) => readFile(new URL(`../public/${f}`, import.meta.url), 'utf8');
   const html = await read('index.html');
   assert.ok(html.includes('src="search.js"') && html.indexOf('src="search.js"') > html.indexOf('src="app.js"'));
-  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 'search-form']) {
+  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 's-csv', 'search-form']) {
     assert.ok(html.includes(`id="${id}"`), id);
   }
   assert.match(await read('sw.js'), /'\/search\.js'/);
+});
+
+test('CSV export: header, quoting, and formula text is defused', async () => {
+  const src = await readFile(new URL('../public/search.js', import.meta.url), 'utf8');
+  const exported = {};
+  const noop = () => {};
+  const sandbox = { document: { getElementById: () => ({ addEventListener: noop }) }, __searchExports: exported };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(src, sandbox);
+  assert.equal(typeof exported.toCsv, 'function');
+  const rows = [
+    shape(row(1)),
+    shape(row(2, { insp_carrier_name: '=HYPERLINK("http://evil","x")', insp_carrier_city: 'DENVER, CO', location_desc: '+CMD|calc' })),
+    shape(row(3, { insp_carrier_name: 'SAY "HI" TRUCKING', insp_carrier_city: '@home' })),
+  ];
+  const lines = exported.toCsv(rows).split('\r\n');
+  assert.equal(lines[0], '"Date","Time","Place","Level","Level name","Violations","Out of service","Vehicle OOS","Driver OOS","Hazmat OOS","Carrier","City","State","DOT number","Inspection ID"');
+  assert.equal(lines[1], '"2026-01-05","08:08","FORT COLLINS POE NB","3","Driver / credentials","2","1","1","0","0","DUCKS TRUCKING","DENVER","CO","3380514","1001"');
+  assert.ok(lines[2].includes('"\'=HYPERLINK(""http://evil"",""x"")"'));        // formula defused, quotes doubled
+  assert.ok(lines[2].includes('"\'+CMD|calc"') && lines[2].includes('"DENVER, CO"'));
+  assert.ok(lines[3].includes('"SAY ""HI"" TRUCKING"') && lines[3].includes('"\'@home"'));
+  assert.equal(lines.length, 5);                                                 // header + 3 rows + trailing newline
 });

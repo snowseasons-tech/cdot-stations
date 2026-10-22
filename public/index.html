@@ -108,8 +108,8 @@
     </form>
     <p id="s-status" class="sub" aria-live="polite"></p>
     <ul id="s-results" class="results"></ul>
-    <button id="s-more" type="button" hidden>Load more</button>
-    <p class="sub">Fixed-port inspections in Colorado from FMCSA's public Vehicle Inspection File, newest first, looked up live when you search. Roadside patrol stops are excluded. Carrier names are as FMCSA publishes them.</p>
+    <div class="actions"><button id="s-more" type="button" hidden>Load more</button> <button id="s-csv" type="button" hidden>Download CSV</button></div>
+    <p class="sub">Fixed-port inspections in Colorado from FMCSA's public Vehicle Inspection File, newest first, looked up live when you search. Roadside patrol stops are excluded. Carrier names are as FMCSA publishes them. Download CSV saves the results shown so far; use Load more first to include more.</p>
     <menu><button id="s-close" type="button">Close</button></menu>
   </dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>

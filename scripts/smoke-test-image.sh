@@ -28,5 +28,10 @@ B=http://127.0.0.1:$PORT
 check "home page" 200 "$B/"
 check "station list" 200 "$B/api/stations"
 check "inspection data is baked in" 200 "$B/api/stations/limon/inspections"
+check "inspection locations are baked in" 200 "$B/api/inspection-locations?levels=1,2"
+body=$(curl -s "$B/api/inspection-locations?levels=1,2")
+[ "$(printf '%s' "$body" | jq '.locations | length')" -gt 100 ] || { echo "FAIL: too few inspection locations in the image" >&2; exit 1; }
+echo "ok   inspection locations are non-empty"
+check "bad level is rejected" 400 "$B/api/inspection-locations?levels=9"
 check "write without token is rejected" 401 -X PUT -H 'content-type: application/json' -d '{"status":"open"}' "$B/api/stations/limon/status"
 check "write with token works" 200 -X PUT -H 'content-type: application/json' -H 'authorization: Bearer smoke-test-token' -d '{"status":"open"}' "$B/api/stations/limon/status"

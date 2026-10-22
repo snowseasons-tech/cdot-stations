@@ -9,7 +9,7 @@ WORKDIR /app
 COPY package.json *.js ./
 COPY adapters ./adapters
 COPY public ./public
-COPY data/stations.json data/inspections.json ./data/
+COPY data/stations.json data/inspections.json data/inspection-locations.json ./data/
 COPY scripts ./scripts
 
 # Status and history live on this volume; mount it to keep them across deploys.

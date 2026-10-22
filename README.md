@@ -185,6 +185,18 @@ To change the schedule, edit the `cron` line. Bot commits go straight to `main`;
 - **Third-party assets:** Leaflet loads from unpkg pinned to an exact version with Subresource Integrity hashes, so a tampered CDN file won't run. When bumping Leaflet, update the version and both hashes in `public/index.html`; `npm test` fails if a hash or version pin is missing.
 - **Not handled in the app:** HTTPS and HSTS (add `Strict-Transport-Security` at the proxy once it serves HTTPS) and request rate limiting for non-failed traffic (use nginx `limit_req`).
 
+### Inspection locations on the map
+
+Tick **Show inspection locations on the map** (above the station list) to draw circles for where level I–V inspections happened, sized by count. Pick any combination of levels and either the last 12 months or all available data (about 3 years); click a circle for its level breakdown and out-of-service rates. Purple circles are ports of entry; blue circles are towns. The choices are remembered in the browser.
+
+FMCSA's inspection records have **no coordinates**, only a place description, so each record is placed by `scripts/sync-inspection-locations.js`:
+
+- `LIMON POE WB` / `LAMAR PORT OF ENTRY` and fixed-facility inspections in a port's town go to that port's coordinates (about 67% of inspections);
+- `<TOWN> CO` goes to the town's centroid from `data/co-places.json`, built from the US Census gazetteer with `npm run build:places` (about 29%). Roadside stops in a port's town are pinned at the town, or at the port if the gazetteer doesn't list the town (e.g. Dumont);
+- the remainder (about 4%: small unincorporated places such as Woodrow, and free-text highway-milepost entries) is **not placed**. The panel reports the placed share, and the API returns it as `coverage`. Three ambiguous place names (Coal Creek, Glendale, Twin Lakes) are deliberately left out rather than guessed.
+
+Town pins mark the town's centre, not the exact roadside spot. `npm run sync:locations` refreshes `data/inspection-locations.json` (it's part of the weekly refresh, with the same safety checks). API: `GET /api/inspection-locations?levels=1,2,3&period=12m|all`.
+
 ## Importing status
 
 There is no official CSP/CDOT open/closed feed (checked CSP's Port of Entry page and COtrip, whose ports-of-entry map layer sits behind an undocumented API), so imports come from adapters you point at a source. Imported entries are tagged with their source and shown as "via <source>" in the UI.

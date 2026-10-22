@@ -30,6 +30,7 @@ jobs:
       # The scripts refuse to overwrite on an empty result, dropped stations, or >20% fewer inspections.
       - run: npm run sync
       - run: npm run sync:inspections
+      - run: npm run sync:locations
       - run: npm test
 
       - name: Commit and deploy if the data changed
@@ -43,7 +44,7 @@ jobs:
           { echo '### Data changed'; echo '```'; git diff --stat -- data/; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add data/stations.json data/inspections.json
+          git add data/stations.json data/inspections.json data/inspection-locations.json
           git commit -m "Refresh station and inspection data ($(date -u +%F))"
           git pull --rebase origin main
           git push origin HEAD:main

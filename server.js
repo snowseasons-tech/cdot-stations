@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
 import { importStatuses } from './importer.js';
 import { summarize } from './inspections.js';
+import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
 import { FailureLimiter, tokenMatches } from './auth.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -31,9 +32,10 @@ const SECURITY_HEADERS = {
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
-export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter() } = {}) {
+export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), locationsFile = join(ROOT, 'data/inspection-locations.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter() } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
+  const locations = await readFile(locationsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
   const store = new Store(statusFile);
   await store.load();
   const find = (id) => stations.find((s) => s.id === id);
@@ -100,6 +102,16 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         return json(res, 405, { error: 'method not allowed' });
       }
       if (m) return json(res, 405, { error: 'method not allowed' });
+
+      if (pathname === '/api/inspection-locations') {
+        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
+        const q = new URL(req.url, 'http://x').searchParams;
+        const levels = parseLevels(q.get('levels'));
+        const period = q.get('period') ?? '12m';
+        if (!levels) return json(res, 400, { error: 'levels must be a comma-separated list of 1-5' });
+        if (!PERIODS.includes(period)) return json(res, 400, { error: `period must be one of ${PERIODS.join(', ')}` });
+        return json(res, 200, summarizeLocations(locations, { levels, period }));
+      }
 
       if (pathname === '/api/import') {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });

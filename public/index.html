@@ -13,7 +13,26 @@
     <p class="sub">CSP/CDOT commercial vehicle ports of entry · status is reported manually, not live from the state</p>
   </header>
   <main>
-    <section id="list" aria-label="Stations"></section>
+    <aside id="side">
+      <section id="layers" aria-label="Inspection locations">
+        <label class="toggle"><input type="checkbox" id="loc-show"> <strong>Show inspection locations on the map</strong></label>
+        <div id="loc-options" hidden>
+          <fieldset>
+            <legend>Inspection levels</legend>
+            <label title="Full: driver and vehicle"><input type="checkbox" class="loc-level" value="1" checked> I</label>
+            <label title="Walk-around"><input type="checkbox" class="loc-level" value="2" checked> II</label>
+            <label title="Driver / credentials only"><input type="checkbox" class="loc-level" value="3" checked> III</label>
+            <label title="Special study"><input type="checkbox" class="loc-level" value="4" checked> IV</label>
+            <label title="Vehicle only"><input type="checkbox" class="loc-level" value="5" checked> V</label>
+          </fieldset>
+          <label class="period">Period
+            <select id="loc-period"><option value="12m">Last 12 months</option><option value="all">All available (about 3 years)</option></select>
+          </label>
+        </div>
+        <p id="loc-summary" class="sub" aria-live="polite"></p>
+      </section>
+      <section id="list" aria-label="Stations"></section>
+    </aside>
     <div id="map" role="application" aria-label="Station map"></div>
   </main>
   <dialog id="editor">

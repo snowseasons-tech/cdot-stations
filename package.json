@@ -4,12 +4,16 @@
   "description": "Tracker for CDOT/CSP commercial vehicle inspection stations (ports of entry) in Colorado",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "sync": "node scripts/sync-stations.js",
     "sync:inspections": "node scripts/sync-inspections.js",
     "import": "node scripts/import-status.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "sync:locations": "node scripts/sync-inspection-locations.js",
+    "build:places": "node scripts/build-places.js"
   }
 }

@@ -107,6 +107,66 @@ $('f-save').addEventListener('click', async (e) => {
   await load();
 });
 
+// --- inspection locations layer ---
+const LOC_COLORS = { port: '#8e44ad', place: '#2b6cb0' };
+const locLayer = L.layerGroup();
+let locRequest = 0; // only the newest request may draw, so rapid filter changes can't stack circles
+const prefs = { show: false, levels: [1, 2, 3, 4, 5], period: '12m' };
+try { Object.assign(prefs, JSON.parse(localStorage.getItem('locPrefs') ?? '{}')); } catch { /* storage unavailable: defaults */ }
+prefs.levels = [...new Set((Array.isArray(prefs.levels) ? prefs.levels : []).map(Number).filter((l) => [1, 2, 3, 4, 5].includes(l)))];
+if (!['12m', 'all'].includes(prefs.period)) prefs.period = '12m';
+prefs.show = prefs.show === true;
+const savePrefs = () => { try { localStorage.setItem('locPrefs', JSON.stringify(prefs)); } catch { /* ignore */ } };
+
+function locPopup(l) {
+  const rows = l.byLevel.map((b) => el('li', { textContent: `Level ${b.level} · ${b.name}: ${fmt(b.count)}` }));
+  return el('div', {},
+    el('strong', { textContent: l.name }), ` · ${l.kind === 'port' ? 'port of entry' : 'town'}`,
+    el('div', { textContent: `${fmt(l.total)} inspections` }),
+    el('ul', { className: 'popup-rows' }, ...rows),
+    el('div', { className: 'meta', textContent: `Vehicle OOS ${pct(l.vehicleOosRate)} · driver OOS ${pct(l.driverOosRate)}` }),
+  );
+}
+
+async function loadLocations() {
+  const mine = ++locRequest;
+  $('loc-show').checked = prefs.show;
+  $('loc-options').hidden = !prefs.show;
+  locLayer.clearLayers();
+  if (!prefs.show) { locLayer.remove(); $('loc-summary').textContent = ''; return; }
+  if (!prefs.levels.length) { $('loc-summary').textContent = 'Pick at least one inspection level.'; return; }
+  locLayer.addTo(map);
+  const res = await fetch(`/api/inspection-locations?levels=${prefs.levels.join(',')}&period=${prefs.period}`);
+  if (mine !== locRequest) return;
+  if (!res.ok) { $('loc-summary').textContent = 'Could not load inspection locations.'; return; }
+  const d = await res.json();
+  if (mine !== locRequest) return;
+  locLayer.clearLayers();
+  for (const l of d.locations) { // largest first, so small locations draw on top of big ones
+    L.circleMarker([l.lat, l.lng], {
+      radius: Math.min(26, 4 + Math.sqrt(l.total) * 0.55),
+      color: LOC_COLORS[l.kind], weight: 1, fillColor: LOC_COLORS[l.kind], fillOpacity: 0.4,
+    }).bindPopup(locPopup(l)).bindTooltip(`${l.name}: ${fmt(l.total)}`).addTo(locLayer);
+  }
+  const total = d.locations.reduce((n, l) => n + l.total, 0);
+  $('loc-summary').textContent = d.locations.length
+    ? `${d.locations.length} locations · ${fmt(total)} inspections. Locations could be placed for ${pct(d.coverage.mappedShare)} of Colorado's inspections; the rest have no usable place name. Purple: ports of entry, blue: towns.`
+    : 'No inspections for that selection.';
+}
+
+$('loc-show').addEventListener('change', (e) => { prefs.show = e.target.checked; savePrefs(); loadLocations(); });
+$('loc-period').addEventListener('change', (e) => { prefs.period = e.target.value; savePrefs(); loadLocations(); });
+for (const box of document.querySelectorAll('.loc-level')) {
+  box.checked = prefs.levels.includes(Number(box.value));
+  box.addEventListener('change', () => {
+    prefs.levels = [...document.querySelectorAll('.loc-level')].filter((b) => b.checked).map((b) => Number(b.value));
+    savePrefs();
+    loadLocations();
+  });
+}
+$('loc-period').value = prefs.period;
+loadLocations();
+
 let inspecting = null;
 
 async function showInspections() {

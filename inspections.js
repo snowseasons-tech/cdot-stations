@@ -21,8 +21,8 @@ const monthsBack = (through, n) => {
 
 // Each OOS rate only counts inspections that actually covered that part: Level III is driver-only
 // and Level V is vehicle-only, so including them would dilute the other rate.
-const VEHICLE_LEVELS = new Set(['1', '2', '5', '6']);
-const DRIVER_LEVELS = new Set(['1', '2', '3', '6']);
+export const VEHICLE_LEVELS = new Set(['1', '2', '5', '6']);
+export const DRIVER_LEVELS = new Set(['1', '2', '3', '6']);
 
 const rate = (part, whole) => (whole ? part / whole : null);
 

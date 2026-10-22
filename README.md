@@ -263,6 +263,28 @@ Commands that mention `docker` need a user in the `docker` group. In a session s
 
 To restore, see Backups; to stop the alerts temporarily, set `ALERT_REPO=""` in the cron line.
 
+## Testing
+
+There are four layers, from fast and local to slow and realistic.
+
+| Layer | Run it | What it covers |
+|---|---|---|
+| Unit and API tests (43) | `npm test` | Starts the real server on a random port with temp files and calls it over HTTP, plus pure-function tests. No network, no Docker; takes a few seconds. |
+| Backup end-to-end | `bash test/e2e/backup.sh` | Backup, retention pruning, refusal of corrupt data, restore and the heartbeat, against a throwaway container and a local git repo. Needs Docker, `jq` and `git`; leaves the real deployment untouched. |
+| Image smoke test | `docker build -t cdot-local . && bash scripts/smoke-test-image.sh cdot-local` | Boots the built image and checks it becomes healthy, serves the page and API (including inspection data) and enforces the write token. CI runs it before publishing. |
+| Post-deploy health check | automatic | The deploy script waits for the container's health check and rolls back if it fails. |
+
+**What the unit tests cover** (`test/*.test.js`): the API and storage (`api`), status import and CSV parsing (`import`), inspection summaries and out-of-service rates (`inspections`), the inspection-locations map data (`inspection-locations`), token checking, lockout, security headers and integrity hashes (`security`), the sync scripts' change detection and guards (`refresh`), and backup and heartbeat alerting using a fake `gh` (`alerts`).
+
+**Writing tests**
+- Use Node's built-in runner (`node:test`, `node:assert/strict`); no test framework is installed.
+- API tests start the server with `createApp()` on port 0 and register cleanup with `t.after(...)` so a failed assertion can't leave a server running and hang the suite.
+- Pass temp file paths to `createApp` (`statusFile`, `inspectionsFile`, ...) instead of touching `data/`. Don't call live services (CDOT, FMCSA, GitHub) from `npm test`; test the parsing and guard logic with sample data.
+- Shell scripts are tested by running them with stubs on `PATH` (see `test/alerts.test.js`, which fakes `gh`) or against a throwaway container (`test/e2e/backup.sh`).
+- When you change a safety check, break it on purpose once and confirm a test fails.
+
+**CI.** Pushes and pull requests run `npm test` on Node 22; pushes to `main` continue to the image smoke test, publish and deploy. The weekly data-refresh workflow runs the tests before it commits new data.
+
 ## Contributing
 
 **Setup.** Node 20 or newer; there is nothing to install (the app has no npm dependencies). `npm start` runs it on `127.0.0.1:3000`, `npm test` runs the suite (the Docker-based backup test, `bash test/e2e/backup.sh`, is separate and needs Docker).

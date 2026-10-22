@@ -5,8 +5,8 @@
 //  - The API is never touched: data always comes live from the server.
 //  - Only plain same-origin 200 responses are cached. Redirects (such as the Cloudflare Access sign-in) and anything
 //    cross-origin are passed through untouched and never stored, so a sign-in page can't end up cached as "the app".
-const CACHE = 'shell-v1';
-const SHELL = ['/', '/styles.css', '/app.js', '/links.js', '/follow.js', '/install.js', '/manifest.webmanifest', '/icons/icon-192.png'];
+const CACHE = 'shell-v2';
+const SHELL = ['/', '/styles.css', '/app.js', '/links.js', '/search.js', '/follow.js', '/install.js', '/manifest.webmanifest', '/icons/icon-192.png'];
 
 const cacheable = (res) => res.ok && res.type === 'basic' && !res.redirected;
 

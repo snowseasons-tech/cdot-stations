@@ -70,6 +70,7 @@
         </div>
         <p id="loc-summary" class="sub" aria-live="polite"></p>
       </section>
+      <button id="search-open" type="button" class="search-open">Search inspections</button>
       <section id="list" aria-label="Stations"></section>
     </aside>
     <div id="map" role="application" aria-label="Station map"></div>
@@ -95,9 +96,26 @@
     <p class="sub">North American Standard inspections at the fixed port, from FMCSA's public Vehicle Inspection File. Roadside patrol stops in the same town are excluded. Vehicle OOS rate is the share of vehicle inspections (Levels I, II, V) with a vehicle out-of-service violation; driver OOS rate likewise over driver inspections (Levels I, II, III).</p>
     <menu><button id="insp-close">Close</button></menu>
   </dialog>
+  <dialog id="search" class="wide">
+    <h2>Search inspections</h2>
+    <form id="search-form">
+      <label>Place or carrier <input id="s-q" type="search" maxlength="40" placeholder="e.g. Fort Collins, or a carrier name" autocomplete="off"></label>
+      <div class="dates">
+        <label>From <input id="s-from" type="date" min="2000-01-01"></label>
+        <label>To <input id="s-to" type="date" min="2000-01-01"></label>
+      </div>
+      <button id="s-go" type="submit">Search</button>
+    </form>
+    <p id="s-status" class="sub" aria-live="polite"></p>
+    <ul id="s-results" class="results"></ul>
+    <button id="s-more" type="button" hidden>Load more</button>
+    <p class="sub">Fixed-port inspections in Colorado from FMCSA's public Vehicle Inspection File, newest first, looked up live when you search. Roadside patrol stops are excluded. Carrier names are as FMCSA publishes them.</p>
+    <menu><button id="s-close" type="button">Close</button></menu>
+  </dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="links.js"></script>
   <script src="app.js"></script>
+  <script src="search.js"></script>
   <script src="install.js"></script>
   <script src="follow.js"></script>
 </body>

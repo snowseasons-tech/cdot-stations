@@ -578,6 +578,15 @@ FMCSA's inspection records have **no coordinates**, only a place description, so
 
 Town pins mark the town's centre, not the exact roadside spot. `npm run sync:locations` refreshes `data/inspection-locations.json` (it's part of the weekly refresh, with the same safety checks). API: `GET /api/inspection-locations?levels=1,2,3&period=12m|all`.
 
+## Searching inspections
+
+**Search inspections** (above the station list) opens a list of individual fixed-port inspections in Colorado. Type a place or a carrier name and/or pick a date range; results are newest first, 50 at a time with **Load more** (up to 1,000 per search, so narrow the dates for older ones). Each row shows the date and time, the place, the inspection level, the number of violations, any out-of-service result, and the carrier's name, city and DOT number.
+
+- **It is looked up live, and nothing is stored.** The server asks FMCSA's public Vehicle Inspection File (the same dataset as the counts) and caches each answer for 10 minutes. If FMCSA is down, the search says so and the rest of the tracker is unaffected.
+- **Violation codes aren't in this dataset**, only counts. Roadside patrol stops are excluded, as everywhere else.
+- **Carrier names are shown as FMCSA publishes them.** They are public records, but a sole proprietor's name can be one. To search by place only, remove `carrier`, `city`, `state` and `dot` from `shape()` in `inspection-search.js`.
+- **What a caller can ask for is tightly bounded.** The host, dataset, columns and filters are fixed; only a short text term (letters, digits, space and `. & ' -`), two dates and a page offset get through, and the term goes inside a quoted value with its quotes doubled. Searches are limited to 30 a minute per client. The endpoint is not served on the public sales hostname.
+
 ## Importing status
 
 There is no official CSP/CDOT open/closed feed (checked CSP's Port of Entry page and COtrip, whose ports-of-entry map layer sits behind an undocumented API), so imports come from adapters you point at a source. Imported entries are tagged with their source and shown as "via <source>" in the UI.
@@ -603,6 +612,7 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 ## API
 
 - `GET /api/stations` · `GET /api/stations/:id` · `GET /api/stations/:id/history`
+- `GET /api/inspection-search?q=&from=YYYY-MM-DD&to=YYYY-MM-DD&offset=0` returns `{results, hasMore, offset, pageSize}`; at least one of `q`, `from`, `to` is required (400 otherwise); 429 when over the limit, 502 if FMCSA can't be reached
 - `PUT /api/stations/:id/status` with `{"status":"open|closed|unknown","note":"..."}`
 - `POST /api/import` with `{"source":"csp","records":[{"station":"limon","status":"open"}]}` (max 500 records) returns `{updated, unchanged, skipped}`
 

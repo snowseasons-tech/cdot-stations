@@ -80,6 +80,11 @@ test('third-party scripts and styles are pinned with integrity hashes', async ()
   }
 });
 
+test('the search page puts server data in as text, never as HTML', async () => {
+  const js = await readFile(new URL('../public/search.js', import.meta.url), 'utf8');
+  assert.equal(/\.innerHTML\s*=|insertAdjacentHTML|outerHTML\s*=|document\.write/.test(js), false);
+});
+
 test('the page never hands Leaflet a string to render as HTML', async () => {
   const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   // Leaflet sets string tooltip/popup content with innerHTML; data (place names, notes) must go in as DOM nodes.

@@ -62,3 +62,14 @@ html.standalone .update-btn { display:none; }
 .conditions summary { cursor:pointer; font-weight:600; }
 .conditions ul { margin:6px 0; padding-left:18px; }
 .conditions li { margin:4px 0; }
+
+/* Inspection search */
+.search-open { margin:0 0 10px; width:100%; }
+dialog.wide { width:min(94vw,640px); max-height:90vh; overflow:auto; }
+dialog .dates { display:flex; gap:10px; }
+dialog .dates label { flex:1; }
+.results { list-style:none; margin:10px 0; padding:0; display:flex; flex-direction:column; gap:6px; }
+.results li { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--bg); font-size:.85rem; }
+.results .top { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
+.results .meta { color:var(--muted, inherit); opacity:.85; margin-top:2px; }
+.results .oos { color:#b42318; font-weight:700; }

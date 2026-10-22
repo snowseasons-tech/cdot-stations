@@ -79,7 +79,7 @@ test('with selling off, none of the sales routes exist and the tracker is unaffe
 
 test('the public hostname serves only the sales pages and Stripe\'s webhook; the tracker\'s data is never reachable on it', async (t) => {
   const ctx = await start(t);
-  for (const path of ['/api/stations', '/api/stations/limon', '/api/stations/limon/history', '/api/inspection-locations', '/api/push/key', '/api/import',
+  for (const path of ['/api/stations', '/api/stations/limon', '/api/stations/limon/history', '/api/inspection-locations', '/api/inspection-search?q=limon', '/search.js', '/api/push/key', '/api/import',
     '/api/members', '/app.js', '/index.html', '/manifest.webmanifest', '/sw.js', '/icons/icon-192.png', '/styles.css', '/data/stations.json', '/join/../app.js']) {
     assert.equal((await ctx.pub(path)).status, 404, path);
   }

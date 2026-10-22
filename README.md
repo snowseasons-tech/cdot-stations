@@ -49,6 +49,33 @@ docker run -d --name cdot-stations --restart unless-stopped -p 3000:3000 \
 - Station and inspection data are baked into the image. To refresh them, run `npm run sync` / `npm run sync:inspections`, commit, and push; the workflow rebuilds the image.
 - Put it behind HTTPS (Caddy, nginx or your host's proxy) since the token travels in a header.
 
+### Deploy to your server
+
+On pushes to `main`, once the image is published, the `deploy` job SSHes to your server, pulls the exact commit's image (`sha-<commit>`), replaces the `cdot-stations` container, and waits for its health check. If the new container isn't healthy it restores the previous image and the job fails. The job is skipped until `DEPLOY_HOST` is set, and you can re-run it from the Actions tab.
+
+Server needs Docker, and an SSH user that can run `docker` (e.g. in the `docker` group). The container publishes `127.0.0.1:3000` by default for a reverse proxy on the same machine to forward to.
+
+One-time setup (run these yourself; the secrets never pass through anyone else):
+
+```bash
+# 1. A dedicated deploy key; add the .pub to ~/.ssh/authorized_keys for the deploy user on the server
+ssh-keygen -t ed25519 -f deploy_key -N "" -C cdot-stations-deploy
+
+# 2. Pin the server's host key. Compare the fingerprint with the server's before trusting it.
+ssh-keyscan -p 22 your.server.example > known_hosts && ssh-keygen -lf known_hosts
+
+# 3. Repository variables (not secret) and secrets
+gh variable set DEPLOY_HOST --body your.server.example
+gh variable set DEPLOY_USER --body deploy
+gh secret set DEPLOY_SSH_KEY < deploy_key
+gh secret set DEPLOY_KNOWN_HOSTS < known_hosts
+openssl rand -hex 32 | gh secret set STATUS_TOKEN   # the write token; read it back from the server's ~/cdot-stations/env
+```
+
+Optional variables: `DEPLOY_PORT` (SSH port, default 22) and `DEPLOY_PORT_MAPPING` (default `127.0.0.1:3000:3000`; use `0.0.0.0:3000:3000` if the proxy runs on another host). The job uses a GitHub environment named `production`; GitHub creates it on first run, and you can add required reviewers to it for manual approval.
+
+The token is written to `~/cdot-stations/env` (mode 600) on the server and passed to the container with `--env-file`, never on a command line.
+
 ## Importing status
 
 There is no official CSP/CDOT open/closed feed (checked CSP's Port of Entry page and COtrip, whose ports-of-entry map layer sits behind an undocumented API), so imports come from adapters you point at a source. Imported entries are tagged with their source and shown as "via <source>" in the UI.

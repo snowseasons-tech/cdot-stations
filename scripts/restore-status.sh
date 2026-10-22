@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restores saved data from a backup file into the running container and restarts it (the app reads its data files
-# only at startup). Works for both kinds of backup, detected from the file: status data (status-*.json) and push
-# followers (subscriptions-*.json). The current file is saved first as pre-restore-<kind>-<time>.json in $BACKUP_DIR.
+# only at startup). Works for every kind of backup, detected from the file: status data (status-*.json), push
+# followers (subscriptions-*.json) and membership purchases (members-*.json). The current file is saved first as pre-restore-<kind>-<time>.json in $BACKUP_DIR.
 #   bash scripts/restore-status.sh <backup-file> [--yes]
 # Get a backup from ~/cdot-stations/backups/ or from the backup repo (status.json, any commit: git show <sha>:status.json > file).
 set -euo pipefail
@@ -18,8 +18,12 @@ elif jq -e '.subscriptions | type == "object"' "$FILE" >/dev/null 2>&1; then
   KIND=subscriptions
   TARGET=/var/lib/cdot/subscriptions.json
   DESC="$(jq '.subscriptions | length' "$FILE") push subscriptions"
+elif jq -e '(.members | type == "object") and (.events | type == "array")' "$FILE" >/dev/null 2>&1; then
+  KIND=members
+  TARGET=/var/lib/cdot/members.json
+  DESC="$(jq '.members | length' "$FILE") members"
 else
-  echo "$FILE is not a valid status or subscriptions backup" >&2
+  echo "$FILE is not a valid status, subscriptions or members backup" >&2
   exit 1
 fi
 

@@ -85,6 +85,8 @@ The parts only meet through files and git: the data pipeline writes `data/*.json
 server.js ─► store.js ─► atomic-writer.js    status.json: current status per station + capped history
           ─► push.js ─► atomic-writer.js     followers (subscriptions.json), notifier, web-push sender
           ─► auth.js           constant-time token check, failed-attempt lockout
+          ─► stripe.js          Founding Member checkout and webhook verification (no Stripe package)
+          ─► members.js ─► atomic-writer.js   who has bought (members.json)
           ─► importer.js ─► store.js     validates and applies imported records
           ─► inspections.js            monthly rows ─► per-station summaries, OOS rates
           ─► inspection-locations.js ─► inspections.js     map points filtered by level and period
@@ -110,6 +112,7 @@ scripts/               ─ standalone; none import server code
 | `data/inspection-locations.json` | `{ source, fetchedAt, through, coverage, locations: [{ id, name, kind, lat, lng, levels }] }` |
 | `status.json` (volume) | `{ current: { <id>: { status, note, updatedAt, source } }, history: [ ... last 1000 ... ] }` |
 | `subscriptions.json` (volume) | `{ subscriptions: { <hash>: { endpoint, keys, stations: ['all'] or [ids], createdAt, updatedAt } } }`, one per phone (max 500) |
+| `members.json` (volume) | `{ members: { <stripe session id>: { email, name, amount, currency, paidAt, needsReview, accessGranted, grantedAt } }, events: [ ...last 500 Stripe event ids... ] }`, one per purchase |
 
 A station's `id` (a slug of its name) is the key everywhere: inspections and saved statuses refer to it, which is why the sync refuses to drop a station silently.
 
@@ -236,6 +239,9 @@ Benchmark a temporary instance, not the production container, and stop it by PID
 | `STATUS_TOKEN` | unset | If set, `PUT /api/stations/:id/status` and `POST /api/import` require `Authorization: Bearer <token>` |
 | `STATUS_FILE` | `data/status.json` | Where status and history are stored |
 | `SUBSCRIPTIONS_FILE` | `data/subscriptions.json` | Where push followers are stored |
+| `MEMBERS_FILE` | `data/members.json` | Where membership purchases are stored |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_FOUNDING`, `JOIN_BASE_URL`, `JOIN_TERMS_URL`, `JOIN_REFUND_URL`, `JOIN_PRIVACY_URL` | unset | Turn on selling memberships (all seven or none; see Selling memberships) |
+| `JOIN_TRACKER_URL`, `ALLOW_LIVE` | unset | Optional: the tracker's address shown on the thank-you page; `ALLOW_LIVE=1` permits a live Stripe key |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | unset | Turn on push notifications (all three or none; see Notifications) |
 | `TRUST_PROXY` | unset | `1` = take the client address from the proxy's `X-Real-IP` (see Security) |
 | `ALLOW_OPEN_WRITES` | unset | `1` = allow listening on a non-local address without `STATUS_TOKEN` |
@@ -375,17 +381,70 @@ Then deploy (push a change, or re-run the workflow). The deploy writes the value
 - The server needs outbound HTTPS to the push services; nothing needs to reach it from them.
 - Tests: `npm test` covers following, targeting (only followers of the changed station), and the real `web-push` sender against a local push service (signature and decryption verified). Whether a real phone receives a notification can only be checked on a real phone.
 
+## Selling memberships
+
+A **Founding Member** membership (one payment, lifetime access to the tracker) can be sold from a public page, `/join`, paid through Stripe Checkout. **It is built and tested but switched off**: nothing sells until you add the Stripe settings below, and it has so far been exercised only against a fake Stripe in tests (no real Stripe account was involved). Try it in Stripe's test mode before taking any real money.
+
+```
+buyer ─► /join (public) ─► Stripe Checkout (pays) ─► Stripe tells /api/stripe-webhook (signed) ─► recorded in members.json
+                                                                                                          │
+you, by hand:  npm run members -- pending  ─► add the email to the Cloudflare Access list ─► npm run members -- grant <id>
+```
+
+**What the buyer sees.** A plain page on the public hostname with the offer, the price (read from Stripe), what they get, an honest note that this is an independent tool with manually entered status, links to your terms, refund and privacy pages, and a button that stays disabled until they tick that they agree (the server checks this too). Then Stripe's own checkout, then a thank-you page saying their email will be added to the sign-in list by hand.
+
+**Access is granted by hand.** A verified payment records the buyer; it does not unlock anything by itself. The tracker is private behind Cloudflare Access, which admits a list of email addresses, so for each purchase you add the buyer's email to that list. `npm run members -- pending` shows who is waiting; `npm run members -- grant <session-id>` marks them done. (Automating this through Cloudflare's API is on the roadmap; hand-granting keeps a Cloudflare credential out of this app for now.) A purchase with no usable email is still recorded, shown as needing review: contact the buyer through Stripe.
+
+### Turning it on (one-time)
+
+Do all of this in Stripe's **test mode** first.
+
+1. **Stripe: create the product.** A product "Founding Member" with a **one-time** price (for example $299). Copy the price id (`price_...`). The page reads its amount from this price, so change the price in Stripe, not in code.
+2. **Cloudflare: add a public hostname for the sales page**, for example `join.snowseasonstech.net`, to the existing tunnel, pointing at `http://127.0.0.1:8080` (the same nginx). **Do not put a Cloudflare Access application on it**: buyers and Stripe must be able to reach it. This is the one place the app is open to the internet, which is why the app itself restricts that hostname to the sales pages and the webhook (see Security). Leave the tracker's own hostname and its Access application exactly as they are.
+3. **Stripe: add a webhook endpoint** at `https://join.snowseasonstech.net/api/stripe-webhook` for the events `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Copy its signing secret (`whsec_...`).
+4. **Set the settings.** The two secrets go in as repository secrets (don't paste them anywhere else), the rest as variables:
+   ```bash
+   gh secret set STRIPE_SECRET_KEY        # your sk_test_... key, when asked
+   gh secret set STRIPE_WEBHOOK_SECRET    # the whsec_... signing secret
+   gh variable set STRIPE_PRICE_FOUNDING --body price_...
+   gh variable set JOIN_BASE_URL --body https://join.snowseasonstech.net
+   gh variable set JOIN_TERMS_URL --body https://<your terms page>
+   gh variable set JOIN_REFUND_URL --body https://<your refund policy>
+   gh variable set JOIN_PRIVACY_URL --body https://<your privacy policy>
+   gh variable set JOIN_TRACKER_URL --body https://stations.snowseasonstech.net   # optional: shown on the thank-you page
+   ```
+   Then deploy. All seven required settings must be present or none (the deploy refuses a partial set, and the server refuses to start with one).
+5. **Try a test purchase** at `https://join.snowseasonstech.net/join` with Stripe's test card `4242 4242 4242 4242` (any future date, any CVC). In the Stripe dashboard the webhook delivery should show `200`, and `npm run members -- pending` on the server should list the test buyer.
+6. **Going live** is a separate, deliberate step: create the live price and a live webhook endpoint, replace the secrets with the live key and live signing secret, and set `gh variable set ALLOW_LIVE --body 1`. Without `ALLOW_LIVE=1` the server refuses a live key.
+
+### Day to day
+
+```bash
+cd ~/Documents/americantree/cdot-stations
+STATUS_TOKEN=$(cat ~/.cdot-stations-deploy/status_token) npm run members -- pending   # who is waiting
+# add each email to the Cloudflare Access policy (Zero Trust, Access controls, Applications, the tracker, its Allow policy), then:
+STATUS_TOKEN=... npm run members -- grant cs_live_...                                 # mark as done
+```
+
+**Refunds and chargebacks are not automatic.** Refunding in Stripe does not remove anyone's access: take their email off the Access list yourself.
+
+### Before you sell, things only you can decide
+
+- **Your terms, refund policy and privacy policy.** The page links to the three addresses you set; they must cover this product. The store's existing pages are written for the store, so check them.
+- **What "lifetime" and "all future features" mean.** The page says lifetime access and "features added in the future". That is an open-ended promise: define it in your terms (for example, "for as long as the service is offered"). The tracker runs on one home server with no uptime guarantee (see Architecture), and its open/closed status depends on people entering it, so be careful what you promise.
+- **Tax and business details** for selling to customers (Stripe Tax is available in the Stripe dashboard).
+
 ## Backups
 
-Station status and history, and the list of who follows which station, live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
+Station status and history, the list of who follows which station, and the membership purchases live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
 
 `scripts/backup-run.sh` (which calls `scripts/backup-status.sh`) runs **daily at 03:30 server time** from cron (installed with `bash scripts/install-backup-cron.sh`; remove it with `crontab -e`). Each run:
 
-1. reads `status.json` (and `subscriptions.json`, once anyone follows a station) from the running container (the app writes both atomically, so a copy is always consistent) and refuses to back up anything that isn't valid;
+1. reads `status.json` (and `subscriptions.json` and `members.json`, once anyone follows a station or buys a membership) from the running container (the app writes both atomically, so a copy is always consistent) and refuses to back up anything that isn't valid;
 2. saves a timestamped copy in `~/cdot-stations/backups/` unless nothing changed, keeping at least the 7 newest and deleting the rest after 30 days;
 3. commits the same file to the private repo [snowseasons-tech/cdot-stations-backup](https://github.com/snowseasons-tech/cdot-stations-backup), so you also survive losing the machine, and git keeps every version. It also updates `heartbeat.txt` there on every successful run (a small commit a day, even when no statuses exist yet); use `git log -- status.json` to see only real data changes.
 
-`subscriptions.json` holds each phone's push address and keys, so it is only as private as the backup repository: keep that private. Restoring either kind of file uses the same command (it recognises which it is). Output goes to `~/cdot-stations/backup.log`. A failed push leaves the local copy in place and the next run retries. The off-site push uses the stored `gh` login.
+`subscriptions.json` holds each phone's push address and keys, and `members.json` holds buyers' email addresses and Stripe payment ids, so both are only as private as the backup repository: keep that private. Restoring either kind of file uses the same command (it recognises which it is). Output goes to `~/cdot-stations/backup.log`. A failed push leaves the local copy in place and the next run retries. The off-site push uses the stored `gh` login.
 
 ### Alerts
 
@@ -424,6 +483,7 @@ To change the schedule, edit the `cron` line. Bot commits go straight to `main`;
 |---|---|
 | **Status data** (who can change it) | Writes (`PUT .../status`, `POST /api/import`) need a bearer token, compared in constant time. After 10 failed attempts in a minute a client gets `429` and its token isn't checked again until the window passes. The server refuses to listen on a non-local address without a token. Input is validated (status must be open/closed/unknown, notes up to 280 characters, body size capped at 10 KB, 500 KB for imports), and for manual updates the server sets the source and time itself, so a caller can't forge them (an import may supply its own timestamp, but never one in the future, and it can't overwrite a newer status). |
 | **People using the page** (XSS and injection) | Notes and station names are put on the page as text, never as HTML. A Content-Security-Policy allows scripts only from this origin and unpkg (no inline scripts), connections only to this origin, and no framing; plus `nosniff`, a referrer policy and a permissions policy. API responses are `no-store`. Reads use no cookies, so there is no CSRF exposure: the token is sent in a header by the page's own code. |
+| **Selling memberships** | Off unless all the Stripe settings are present, and a live Stripe key is refused unless `ALLOW_LIVE=1`. On the public sales hostname the app answers only the sales pages and Stripe's webhook; everything else, including all of the tracker's data and the member list, returns 404 there even with the write token. A purchase is recorded only from a webhook whose signature verifies (HMAC-SHA256 of the exact bytes, five-minute window against replays) and only if it is paid, a one-time payment, and tagged as this product, so other products on the same Stripe account and forged messages are ignored; repeats are harmless. The price is read from Stripe, never from the request, and the page can only send people to stripe.com. Checkout starts only from a JSON request that is not cross-site, with the terms agreed, rate limited to 10 a minute per client. Card details never touch this app, and neither the secret key nor Stripe's error text is ever returned or logged. The member list needs the write token. |
 | **Files on the server** | Static files are served only from `public/` (paths are normalized and must stay inside it). |
 | **Third-party code** | Leaflet loads from unpkg at an exact version with Subresource Integrity hashes, so a tampered file won't run (`npm test` enforces the pin and hashes). The one npm package, `web-push`, is pinned to an exact version with a committed lockfile, installed with scripts disabled (none of its 17 packages has an install script), and checked with `npm audit` (no known vulnerabilities when added); Dependabot opens weekly update PRs. |
 | **Push notifications** | A follower's push address must belong to a real push service (Google, Mozilla, Apple or Microsoft, over HTTPS, no ports or credentials), because the server sends requests to it; otherwise anyone could aim the server at the home network. The follow endpoints accept only `application/json` and refuse requests the browser marks cross-site, so another website can't forge a subscription from a team member's browser; they are rate limited (30 a minute per client) and capped at 500 subscriptions. Messages are encrypted so only the subscribed phone can read them, and the VAPID private key is a secret like the write token. |
@@ -560,6 +620,8 @@ echo '{"current":{},"history":[]}' > /tmp/empty.json && bash scripts/restore-sta
 
 **I'm not getting notifications.** See "Notifications don't arrive" under Troubleshooting. The usual causes are not having installed the app to the Home Screen (iPhone), an iPhone older than iOS 16.4, or notifications blocked in the phone's settings.
 
+**How are memberships sold, and what happens when someone buys?** See "Selling memberships". It is off until Stripe is configured. After a verified payment the buyer is recorded; you then add their email to the sign-in list by hand and mark them done.
+
 **What time zone are times in?** Stored in UTC. The page shows relative times ("12 min ago") and your browser's local date for older updates.
 
 **How do I run it on my own computer?** `git clone`, then `npm start` and open `http://127.0.0.1:3000`. Node 20 or newer, nothing to install.
@@ -603,6 +665,12 @@ Commands that mention `docker` need a user in the `docker` group. In a session s
 - *Nothing after following, and the server log shows `push to ... failed: 401` or `403`:* the VAPID keys changed since the phone followed. Unfollow and follow again on each phone. Don't regenerate the keys unless you have to.
 - *`failed: 410` or `404`:* the phone is gone or uninstalled the app; the server removes it automatically.
 - *Late or missing on a phone that was off or offline:* delivery is best effort and held for up to 6 hours; do-not-disturb and battery-saving modes can delay it.
+
+**Selling memberships.**
+- *`/join` returns 404:* selling is off (a setting is missing) or you're on the tracker's own hostname; use the public sales hostname. A deploy that fails with "Selling is partly configured" is missing one of the seven settings.
+- *The sales page says checkout is unavailable:* the server couldn't read the price from Stripe (wrong `STRIPE_PRICE_FOUNDING`, an inactive or recurring price, or a key from a different Stripe account or mode). Check `docker logs cdot-stations` for `offer unavailable`.
+- *A buyer paid but isn't in `npm run members -- pending`:* in the Stripe dashboard, open the webhook endpoint and look at the delivery. `400` means the signing secret doesn't match `STRIPE_WEBHOOK_SECRET` (copy it again, and make sure test and live secrets aren't mixed); `404` means the hostname or path is wrong or selling is off; no attempt at all means the public hostname isn't routed to the tunnel. Fix it, then resend the event from Stripe: duplicates are harmless.
+- *Server won't start with "STRIPE_SECRET_KEY is a live key":* intended. Set `ALLOW_LIVE=1` only when you mean to take real payments.
 
 **Backups.** Read `~/cdot-stations/backup.log` first.
 - `no status file yet; nothing to back up` is normal until the first status is saved.
@@ -727,7 +795,7 @@ A mobile app is wanted, for the team only, on **iPhone and Android**, hosted by 
 
 ### Possible: paid plans
 
-Proposed, not decided or started. Two tiers for contractors:
+The one-time **Founding Member** offer is built (see "Selling memberships"), switched off, and untested against real Stripe. The monthly tiers below are still only a proposal:
 
 | Tier | Price | For |
 |---|---|---|
@@ -737,7 +805,7 @@ Proposed, not decided or started. Two tiers for contractors:
 Still open: what each tier includes beyond the seat count, whether there is a trial or annual pricing, and who the customers' data and notes belong to. Everything below is what the current app would have to gain or change first, so these are prerequisites and not a design.
 
 - **Per-person accounts and seats.** Today there is one shared write token and a team email list in Cloudflare Access (free for a small team, and meant for staff, not customers). A paid product needs its own sign-in, a seat count per customer, and logins that make changes attributable. This is the same "per-person logins" item as in the mobile plan, and the two should be done together.
-- **Billing.** A payment provider, subscription state (active, past due, cancelled), and the app enforcing it. Never store card details here.
+- **Billing for the monthly tiers.** One-time payments are done; recurring billing needs subscription state (active, past due, cancelled) from Stripe's subscription events, and the app enforcing it. Never store card details here.
 - **Separate customers' data.** Status, notes and followers are one shared set today. Decide whether each customer sees one common set of stations (the public data is common anyway) or has private notes and follow lists, and build the isolation to match.
 - **A product that stands behind its numbers.** The app is unofficial and its open/closed status is only what someone typed in; the inspection figures come from FMCSA files that lag. Selling it means being clear about that (terms of use, a disclaimer, and probably a real status source; see "A real status source").
 - **Hosting fit for a paid service.** It runs as one instance on a home server behind a home network, with no uptime guarantee, and holds up to 500 push subscriptions. Charging customers means moving to hosting with monitoring and a recovery plan, and lifting the single-instance and subscription limits (see Known limits and "A real datastore").
@@ -745,6 +813,7 @@ Still open: what each tier includes beyond the seat count, whether there is a tr
 
 ### Later: features
 
+- **Grant access automatically after a purchase.** Today a person adds each buyer's email to the Cloudflare Access list; the Cloudflare API can do it from the webhook, but that puts a Cloudflare credential on the server, so it is a deliberate step. Refunds could remove the email the same way (handle `charge.refunded`).
 - **Conditions inside the page.** Show closures and incidents near each port as a list, instead of only linking out. Needs CDOT's permission and a documented feed or key from the COtrip team (none is public today; the contact details are in the next item). The links in "Live road conditions" cover the need until then.
 - **A real status source.** The biggest gap is that status is manual. Ask CSP's Port of Entry office and CDOT's COtrip team whether a feed or API exists (contact details from public listings, so verify them: CSP Port of Entry Branch, Golden office, 303-273-1870; COtrip, cdot_cotrip@state.co.us). If one exists it is a single adapter (see Contributing).
 - **Per-direction status.** Most ports have separate eastbound/westbound or northbound/southbound facilities that can open and close independently; today a port has one status.

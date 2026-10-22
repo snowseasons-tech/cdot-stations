@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Backs up the app's saved data from the running container: status.json (current statuses + history) and, when push
-# notifications are in use, subscriptions.json (who follows which station). For each:
+# Backs up the app's saved data from the running container: status.json (current statuses + history), and when they
+# exist, subscriptions.json (who follows which station) and members.json (who has bought a membership). For each:
 #   1. a timestamped copy in $BACKUP_DIR (skipped if identical to the newest), pruned by age
 #   2. a commit in a private GitHub repo, so the data also survives losing this machine; every successful run also
 #      updates heartbeat.txt there, which the repo's scheduled check uses to notice runs that stopped happening
 # Both files are written atomically by the app (temp file + rename), so reading them is always consistent.
-# subscriptions.json holds each phone's push address and keys: it is only as private as the backup repo, so keep that private.
+# subscriptions.json holds each phone's push address and keys, and members.json holds buyers' email addresses and
+# payment ids: both are only as private as the backup repo, so keep that private.
 # Config via env: CONTAINER, BACKUP_BASE, BACKUP_DIR, REPO_DIR, BACKUP_REMOTE ("" disables off-site), KEEP_DAYS, KEEP_MIN
 set -euo pipefail
 
@@ -18,10 +19,11 @@ KEEP_DAYS=${KEEP_DAYS:-30}
 KEEP_MIN=${KEEP_MIN:-7}
 STATUS_PATH=/var/lib/cdot/status.json
 SUBS_PATH=/var/lib/cdot/subscriptions.json
+MEMBERS_PATH=/var/lib/cdot/members.json
 
-# Pushes the heartbeat (always) and whichever data files are given (status, subscriptions) to the backup repo.
+# Pushes the heartbeat (always) and whichever data files are given (status, subscriptions, members) to the backup repo.
 offsite() {
-  local status_file=$1 subs_file=$2
+  local status_file=$1 subs_file=$2 members_file=$3
   [ -n "$REMOTE" ] || { echo "$(date -u +%FT%TZ) off-site: disabled"; return 0; }
   [ -d "$REPO_DIR/.git" ] || git clone -q "$REMOTE" "$REPO_DIR"
   (
@@ -29,6 +31,7 @@ offsite() {
     git pull -q --ff-only
     [ -z "$status_file" ] || cp "$status_file" status.json
     [ -z "$subs_file" ] || cp "$subs_file" subscriptions.json
+    [ -z "$members_file" ] || cp "$members_file" members.json
     date -u +%FT%TZ > heartbeat.txt
     git add -A
     if git diff --cached --quiet; then
@@ -37,6 +40,7 @@ offsite() {
     fi
     local msg="Heartbeat"
     git diff --cached --quiet -- subscriptions.json || msg="Subscriptions backup"
+    git diff --cached --quiet -- members.json || msg="Members backup"
     git diff --cached --quiet -- status.json || msg="Status backup"
     git -c user.name="cdot-stations backup" -c user.email="backup@localhost" commit -q -m "$msg $(date -u +%FT%TZ)"
     git push -q origin HEAD
@@ -47,7 +51,8 @@ offsite() {
 mkdir -p "$BACKUP_DIR"
 tmp_status=$(mktemp "$BACKUP_DIR/.incoming.XXXXXX")
 tmp_subs=$(mktemp "$BACKUP_DIR/.incoming.XXXXXX")
-trap 'rm -f "$tmp_status" "$tmp_subs"' EXIT
+tmp_members=$(mktemp "$BACKUP_DIR/.incoming.XXXXXX")
+trap 'rm -f "$tmp_status" "$tmp_subs" "$tmp_members"' EXIT
 
 # A missing data file is normal (nothing saved yet); docker being unreachable or the container being down is not,
 # and must fail loudly rather than look like "nothing to back up".
@@ -84,7 +89,7 @@ local_copy() {
   return 0 # the loop's own status is "nothing left to prune", which must not look like a failure under set -e
 }
 
-status_file=""; subs_file=""
+status_file=""; subs_file=""; members_file=""
 if fetch "$STATUS_PATH" "$tmp_status" '(.current | type == "object") and (.history | type == "array")' status; then
   status_file=$tmp_status
   local_copy status "$tmp_status"
@@ -96,4 +101,9 @@ if fetch "$SUBS_PATH" "$tmp_subs" '.subscriptions | type == "object"' subscripti
   local_copy subscriptions "$tmp_subs"
 fi
 
-offsite "$status_file" "$subs_file"
+if fetch "$MEMBERS_PATH" "$tmp_members" '(.members | type == "object") and (.events | type == "array")' members; then
+  members_file=$tmp_members
+  local_copy members "$tmp_members"
+fi
+
+offsite "$status_file" "$subs_file" "$members_file"

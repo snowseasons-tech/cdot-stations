@@ -14,7 +14,8 @@
     "import": "node scripts/import-status.js",
     "test": "node --import ./test/setup.mjs --test \"test/*.test.js\"",
     "sync:locations": "node scripts/sync-inspection-locations.js",
-    "build:places": "node scripts/build-places.js"
+    "build:places": "node scripts/build-places.js",
+    "members": "node scripts/members.js"
   },
   "dependencies": {
     "web-push": "3.6.7"

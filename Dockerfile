@@ -4,7 +4,8 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
     STATUS_FILE=/var/lib/cdot/status.json \
-    SUBSCRIPTIONS_FILE=/var/lib/cdot/subscriptions.json
+    SUBSCRIPTIONS_FILE=/var/lib/cdot/subscriptions.json \
+    MEMBERS_FILE=/var/lib/cdot/members.json
 
 WORKDIR /app
 # The one runtime dependency (web-push) is installed first, from the lockfile, so this layer is reused until

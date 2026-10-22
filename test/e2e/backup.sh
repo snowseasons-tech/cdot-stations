@@ -70,4 +70,42 @@ expect "$(printf '["limon"] []')" "$(printf '%s %s' "$(following phone-a)" "$(fo
 expect 1 "$(ls $T/base/backups | grep -c 'pre-restore-subscriptions')"
 expect closed "$(curl -s localhost:3998/api/stations/cortez | jq -r .status)" # statuses untouched by a subscriptions restore
 
+
+# ---- membership purchases (members.json): written by a verified Stripe webhook, so sign one the way Stripe does
+SECRET=whsec_e2etest
+members_files() { find $T/base/backups -name 'members-*.json' | wc -l | tr -d ' '; }
+remote_members() { git -C $T/remote.git show main:members.json 2>/dev/null | jq '.members | length' || echo 0; }
+buy() { # session id, email
+  local body ts sig
+  body=$(printf '{"id":"evt_%s","type":"checkout.session.completed","data":{"object":{"id":"%s","mode":"payment","payment_status":"paid","amount_total":29900,"currency":"usd","created":1700000000,"customer_details":{"email":"%s"},"metadata":{"product":"cdot-founding-member"}}}}' "$1" "$1" "$2")
+  ts=$(date +%s); sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+  curl -s -o /dev/null -X POST -H "stripe-signature: t=$ts,v1=$sig" -H 'content-type: application/json' -d "$body" http://127.0.0.1:3998/api/stripe-webhook
+}
+count_members() { curl -s -H 'authorization: Bearer t' localhost:3998/api/members | jq '.members | length'; }
+
+echo "18) restart with selling on (test settings), record a purchase, and back it up"
+docker rm -f cdot-backup-test >/dev/null
+docker run -d --name cdot-backup-test -p 127.0.0.1:3998:3000 -e STATUS_TOKEN=t -v cdot-backup-test-vol:/var/lib/cdot \
+  -e STRIPE_SECRET_KEY=sk_test_e2e -e STRIPE_WEBHOOK_SECRET=$SECRET -e STRIPE_PRICE_FOUNDING=price_e2e \
+  -e JOIN_BASE_URL=https://join.example.com -e JOIN_TERMS_URL=https://example.com/t -e JOIN_REFUND_URL=https://example.com/r -e JOIN_PRIVACY_URL=https://example.com/p "$IMAGE" >/dev/null
+for _ in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' cdot-backup-test)" = healthy ] && break; sleep 1; done
+expect 0 "$(members_files)"
+sleep 1; buy cs_test_e2e_one buyer@example.com
+expect 1 "$(count_members)"
+bash scripts/backup-status.sh
+expect "1 1" "$(members_files) $(remote_members)"
+
+echo "19) nothing changed: no new members copy; a second purchase makes one"
+sleep 1; bash scripts/backup-status.sh; expect 1 "$(members_files)"
+sleep 1; buy cs_test_e2e_two two@example.com; bash scripts/backup-status.sh; expect "2 2" "$(members_files) $(remote_members)"
+
+echo "20) a corrupted members file is refused"
+docker exec cdot-backup-test sh -c 'echo "{broken" > /var/lib/cdot/members.json'
+if bash scripts/backup-status.sh 2>&1; then echo "FAIL: corrupted members were backed up"; exit 1; fi; expect 2 "$(members_files)"
+
+echo "21) restoring the first members backup brings back only the first purchase (kind detected from the file)"
+bash scripts/restore-status.sh "$(find $T/base/backups -name 'members-*.json' | sort | head -1)" --yes | grep -E "Restoring|healthy"
+expect 1 "$(count_members)"
+expect 1 "$(ls $T/base/backups | grep -c 'pre-restore-members')"
+
 echo "backup e2e: all checks passed"

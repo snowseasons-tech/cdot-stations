@@ -79,6 +79,15 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
           VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          STRIPE_PRICE_FOUNDING: ${{ vars.STRIPE_PRICE_FOUNDING }}
+          JOIN_BASE_URL: ${{ vars.JOIN_BASE_URL }}
+          JOIN_TERMS_URL: ${{ vars.JOIN_TERMS_URL }}
+          JOIN_REFUND_URL: ${{ vars.JOIN_REFUND_URL }}
+          JOIN_PRIVACY_URL: ${{ vars.JOIN_PRIVACY_URL }}
+          JOIN_TRACKER_URL: ${{ vars.JOIN_TRACKER_URL }}
+          ALLOW_LIVE: ${{ vars.ALLOW_LIVE }}
         run: |
           [ -n "$STATUS_TOKEN" ] || { echo "::error::STATUS_TOKEN secret is not set"; exit 1; }
           # Push notifications need all three VAPID values, or none (then they are simply off).
@@ -88,12 +97,25 @@ jobs:
             echo "::error::Push is partly configured: set all of the VAPID_PUBLIC_KEY and VAPID_SUBJECT variables and the VAPID_PRIVATE_KEY secret, or none"
             exit 1
           fi
+          # Selling memberships needs all seven of these, or none (then selling is simply off).
+          sell_count=0
+          for v in "$STRIPE_SECRET_KEY" "$STRIPE_WEBHOOK_SECRET" "$STRIPE_PRICE_FOUNDING" "$JOIN_BASE_URL" "$JOIN_TERMS_URL" "$JOIN_REFUND_URL" "$JOIN_PRIVACY_URL"; do [ -n "$v" ] && sell_count=$((sell_count + 1)); done
+          if [ "$sell_count" -ne 0 ] && [ "$sell_count" -ne 7 ]; then
+            echo "::error::Selling is partly configured: set all of STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET (secrets) and STRIPE_PRICE_FOUNDING, JOIN_BASE_URL, JOIN_TERMS_URL, JOIN_REFUND_URL, JOIN_PRIVACY_URL (variables), or none"
+            exit 1
+          fi
           umask 077
           mkdir -p ~/cdot-stations
           {
             printf 'STATUS_TOKEN=%s\n' "$STATUS_TOKEN"
             if [ "$set_count" -eq 3 ]; then
               printf 'VAPID_PUBLIC_KEY=%s\nVAPID_PRIVATE_KEY=%s\nVAPID_SUBJECT=%s\n' "$VAPID_PUBLIC_KEY" "$VAPID_PRIVATE_KEY" "$VAPID_SUBJECT"
+            fi
+            if [ "$sell_count" -eq 7 ]; then
+              printf 'STRIPE_SECRET_KEY=%s\nSTRIPE_WEBHOOK_SECRET=%s\nSTRIPE_PRICE_FOUNDING=%s\n' "$STRIPE_SECRET_KEY" "$STRIPE_WEBHOOK_SECRET" "$STRIPE_PRICE_FOUNDING"
+              printf 'JOIN_BASE_URL=%s\nJOIN_TERMS_URL=%s\nJOIN_REFUND_URL=%s\nJOIN_PRIVACY_URL=%s\n' "$JOIN_BASE_URL" "$JOIN_TERMS_URL" "$JOIN_REFUND_URL" "$JOIN_PRIVACY_URL"
+              [ -z "$JOIN_TRACKER_URL" ] || printf 'JOIN_TRACKER_URL=%s\n' "$JOIN_TRACKER_URL"
+              [ -z "$ALLOW_LIVE" ] || printf 'ALLOW_LIVE=%s\n' "$ALLOW_LIVE"
             fi
           } > ~/cdot-stations/env
 

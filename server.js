@@ -8,6 +8,8 @@ import { importStatuses } from './importer.js';
 import { summarize } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
 import { FailureLimiter, RateLimiter, tokenMatches } from './auth.js';
+import { Members } from './members.js';
+import { loadStripeConfig, createCheckoutSession, fetchOffer, verifyWebhook, StripeError, PRODUCT } from './stripe.js';
 import { Subscriptions, LimitReached, createNotifier, createWebPushSender, loadPushConfig, validateRequest, isPushEndpoint } from './push.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -41,6 +43,8 @@ const TYPES = {
 
 export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), locationsFile = join(ROOT, 'data/inspection-locations.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter(),
   subscriptionsFile = process.env.SUBSCRIPTIONS_FILE ?? join(ROOT, 'data/subscriptions.json'),
+  membersFile = process.env.MEMBERS_FILE ?? join(ROOT, 'data/members.json'),
+  stripeConfig = loadStripeConfig(), stripeFetch = fetch, joinLimiter = new RateLimiter({ max: 10, windowMs: 60_000 }),
   pushConfig = loadPushConfig(), pushSender, pushLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }) } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
@@ -53,6 +57,8 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
     : null;
   const store = new Store(statusFile, { onChange: (event) => notifier?.notify(event) }); // fire and forget: never delays a save
   await store.load();
+  const members = new Members(membersFile);
+  await members.load();
   const find = (id) => stations.find((s) => s.id === id);
   const view = (s) => ({ ...s, ...store.get(s.id), inspections: summarize(inspections, s.id) });
 
@@ -91,10 +97,107 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
     return JSON.parse(Buffer.concat(chunks).toString() || '{}');
   };
 
+  // Stripe signs the exact bytes it sends, so the webhook needs the body unparsed.
+  const readRaw = async (req, limit) => {
+    let size = 0;
+    const chunks = [];
+    for await (const c of req) {
+      if ((size += c.length) > limit) throw new RangeError('body too large');
+      chunks.push(c);
+    }
+    return Buffer.concat(chunks);
+  };
+
+  // The price shown on the sales page is read from Stripe (so it can't differ from what is charged) and kept for 10 minutes.
+  let offerCache = null;
+  const getOffer = async () => {
+    if (!offerCache || Date.now() - offerCache.at > 600_000) offerCache = { at: Date.now(), value: await fetchOffer(stripeConfig, stripeFetch) };
+    return offerCache.value;
+  };
+  const FULFIL_EVENTS = new Set(['checkout.session.completed', 'checkout.session.async_payment_succeeded']);
+
   const server = createServer(async (req, res) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     try {
       const { pathname } = new URL(req.url, 'http://x');
+
+      // ---- selling memberships (off unless Stripe is configured) ----
+      const selling = Boolean(stripeConfig);
+      const salesPath = pathname === '/join' || pathname.startsWith('/join/') || ['/api/offer', '/api/checkout', '/api/stripe-webhook'].includes(pathname);
+      // The public sales hostname answers only the sales pages and Stripe's webhook; the tracker's data is never served on it.
+      if (selling && (req.headers.host ?? '').toLowerCase() === stripeConfig.joinHost) {
+        if (pathname === '/') { res.writeHead(302, { location: '/join' }); return res.end(); }
+        if (!salesPath) return json(res, 404, { error: 'not found' });
+      }
+      if (salesPath && !selling) return json(res, 404, { error: 'not found' });
+
+      if (pathname === '/api/offer') {
+        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
+        try {
+          return json(res, 200, { name: 'Founding Member', ...(await getOffer()), termsUrl: stripeConfig.termsUrl, refundUrl: stripeConfig.refundUrl, privacyUrl: stripeConfig.privacyUrl, trackerUrl: stripeConfig.trackerUrl });
+        } catch (e) {
+          console.error(`offer unavailable: ${e.message}`);
+          return json(res, 503, { error: 'checkout is unavailable right now' });
+        }
+      }
+
+      if (pathname === '/api/checkout') {
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+        // Same protections as the push endpoints: JSON only (a cross-site page can't send that without a CORS preflight,
+        // which is never granted), nothing the browser marks cross-site, and a per-client rate limit.
+        if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) return json(res, 415, { error: 'content-type must be application/json' });
+        if (req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, { error: 'cross-site requests are not allowed' });
+        const wait = joinLimiter.allow(clientOf(req));
+        if (wait) { res.setHeader('retry-after', wait); return json(res, 429, { error: 'too many requests; try again later' }); }
+        const body = await readBody(req, 1_000);
+        if (body.agreed !== true) return json(res, 400, { error: 'you need to agree to the terms first' });
+        try {
+          return json(res, 200, { url: await createCheckoutSession(stripeConfig, stripeFetch) });
+        } catch (e) {
+          console.error(`checkout failed: ${e.message}`);
+          return json(res, 502, { error: 'could not start checkout; please try again' });
+        }
+      }
+
+      if (pathname === '/api/stripe-webhook') {
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+        let event;
+        try {
+          event = verifyWebhook(await readRaw(req, 262_144), req.headers['stripe-signature'], stripeConfig.webhookSecret);
+        } catch (e) {
+          if (e instanceof StripeError || e instanceof RangeError) return json(res, 400, { error: 'invalid webhook' });
+          throw e;
+        }
+        const session = event.data?.object;
+        if (FULFIL_EVENTS.has(event.type) && session?.mode === 'payment' && session.payment_status === 'paid' && session.metadata?.product === PRODUCT && typeof session.id === 'string') {
+          try {
+            await members.recordPurchase({
+              sessionId: session.id, eventId: event.id, email: session.customer_details?.email ?? session.customer_email,
+              name: session.customer_details?.name, amount: session.amount_total, currency: session.currency,
+              paidAt: new Date((Number(session.created) || Date.now() / 1000) * 1000).toISOString(),
+            });
+          } catch (e) {
+            console.error(`could not record a paid session: ${e.message}`);
+            return json(res, 500, { error: 'internal error' }); // Stripe retries on a non-2xx answer
+          }
+        }
+        return json(res, 200, { received: true }); // events we don't act on are acknowledged too, so Stripe stops resending them
+      }
+
+      // The people who have bought, for whoever adds them to the sign-in list. Write-token only.
+      if (pathname === '/api/members') {
+        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
+        if (!authorize(req, res)) return;
+        const only = new URL(req.url, 'http://x').searchParams.get('pending') === '1';
+        return json(res, 200, { members: only ? members.pending() : members.list() });
+      }
+      const granted = pathname.match(/^\/api\/members\/(cs_[A-Za-z0-9_]+)\/granted$/);
+      if (granted) {
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+        if (!authorize(req, res)) return;
+        const member = await members.markGranted(granted[1]);
+        return member ? json(res, 200, member) : json(res, 404, { error: 'no such member' });
+      }
       const m = pathname.match(/^\/api\/stations(?:\/([a-z0-9-]+)(\/history|\/status|\/inspections)?)?$/);
 
       if (m && req.method === 'GET' && !m[1]) return json(res, 200, { fetchedAt, stations: stations.map(view) });
@@ -160,7 +263,8 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       }
 
       if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
-      const rel = normalize(pathname === '/' ? '/index.html' : pathname);
+      const pages = { '/': '/index.html', '/join': '/join/index.html', '/join/thanks': '/join/thanks.html' };
+      const rel = normalize(pages[pathname] ?? pathname);
       const file = join(PUBLIC, rel);
       if (!file.startsWith(PUBLIC + '/')) return json(res, 403, { error: 'forbidden' });
       const body = await readFile(file).catch(() => null);
@@ -183,6 +287,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
     }
   });
   server.push = { subscriptions, notifier }; // exposed for tests
+  server.members = members;
   return server;
 }
 

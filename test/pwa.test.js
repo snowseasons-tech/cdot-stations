@@ -260,3 +260,12 @@ test('static files are always re-checked: ETag, no-cache for browsers, no-store 
   assert.equal(changed.status, 200);
   assert.notEqual((await fetch(`${base}/follow.js`)).headers.get('etag'), etag); // different content, different tag
 });
+
+test('station pins are red with the status as a ring, so status is still readable on the map', async () => {
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const pin = css.match(/\.pin \{([^}]*)\}/)[1];
+  assert.match(pin, /background:\s*#d7191c/);
+  assert.match(js, /class="pin" style="border-color:\$\{COLORS\[stateOf\(s\)\]\}"/);   // the ring carries the status
+  assert.doesNotMatch(js, /class="pin" style="background/);                                  // and the fill is not the status
+});

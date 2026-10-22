@@ -41,7 +41,7 @@ A small Node app (one npm dependency, `web-push`, for notifications) serves a on
 - by hand, from "Update status" on a card (if the server requires a token, the page asks for it the first time and remembers it in the browser);
 - from an importer: `scripts/import-status.js` runs an adapter (a CSV or JSON file, or a JSON URL) and posts the records to `/api/import`, which validates them, skips bad or older records, ignores unchanged ones, and tags the rest with their source. A real CSP or other feed would be one more small adapter.
 
-**The page** (`public/`) is plain HTML, CSS and JavaScript plus Leaflet and OpenStreetMap tiles (pinned with integrity hashes). It fetches `/api/stations` every minute and redraws the cards and map pins; pin colour follows the station's state.
+**The page** (`public/`) is plain HTML, CSS and JavaScript plus Leaflet and OpenStreetMap tiles (pinned with integrity hashes). It fetches `/api/stations` every minute and redraws the cards and map pins. Station pins are red (they are the ports of entry); the ring around each pin shows the station's state: green open, red closed, grey unknown, amber planned.
 
 **Keeping it running, all automatic** (details in the sections below)
 - *Data refresh:* a weekly workflow re-runs both sync scripts and, only if the data changed, commits it and triggers a deploy.

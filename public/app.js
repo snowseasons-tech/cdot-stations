@@ -87,7 +87,7 @@ function render() {
       popup.append(el('div', { className: 'meta' }, el('a', { href: window.conditionsLinks.cotripMapUrl(l), target: '_blank', rel: 'noopener noreferrer', textContent: 'Live road conditions nearby ↗' })));
       return L.marker([l.lat, l.lng], {
         title: `${s.name} ${l.direction}`,
-        icon: L.divIcon({ className: '', html: `<div class="pin" style="background:${COLORS[stateOf(s)]}"></div>`, iconSize: [18, 18] }),
+        icon: L.divIcon({ className: '', html: `<div class="pin" style="border-color:${COLORS[stateOf(s)]}"></div>`, iconSize: [26, 26] }),
       }).addTo(map).bindPopup(popup);
     });
     markers.set(s.id, ms);

@@ -35,6 +35,9 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - Leaflet is loaded from a CDN with a pinned version and Subresource Integrity hashes.
 - Manual status updates accept only a status and a note; the source and timestamp are always set by the server.
 
+### Changed
+- The nginx site compresses JSON, JavaScript and CSS responses (the map data goes from 106 KB to about 16 KB). Applies when `scripts/install-nginx-site.sh` is re-run on the server.
+
 ### Fixed
 - Simultaneous status updates no longer fail: disk writes are queued, so overlapping updates can't race on the temporary file (previously all but one of a burst of concurrent updates returned an error, though the data was still saved).
 

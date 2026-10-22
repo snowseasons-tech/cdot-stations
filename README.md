@@ -193,16 +193,19 @@ Node is single-threaded, so at 50 concurrent requests most of that latency is qu
 | `/api/inspection-locations` (all levels, all time) | 106 KB | 15 KB |
 | Leaflet from unpkg (not from this server) | 148 KB JS + 15 KB CSS | n/a |
 
+With nginx compression enabled (see below) a visitor receives the gzip column from this server.
+
 **Load in practice.** Each open page polls `/api/stations` once a minute (about 10 KB), so 100 open tabs is under 2 requests per second against a capacity in the thousands. The page is never the bottleneck; the design limit is the single instance (see Architecture), not speed.
 
 **Delivery speed.** A push is live in about 70 to 95 seconds: tests about 10 s, image build, smoke test and publish about 40 to 60 s, deploy about 14 s (one run in six took 161 s).
 
-### Known inefficiencies (not fixed)
+### Compression, and known inefficiencies
 
-In order of value:
-1. **nginx doesn't compress JSON, JS or CSS.** nginx's default `gzip_types` is HTML only, so the 106 KB locations response goes over the LAN uncompressed (about 15 KB gzipped). Adding `gzip_types application/json text/css text/javascript;` to `deploy/nginx-cdot-stations.conf` fixes it. It matters little on a LAN and a lot over the internet.
-2. **Static files have no `Cache-Control`, `ETag` or `Last-Modified`**, so every page load refetches the ~17 KB. Cheap to add if it ever matters.
-3. **Summaries are recomputed on every request** (about 1,000 rows filtered per station), although the data is read-only at runtime. A cache would be trivial and is unnecessary at this traffic.
+**Compression is configured in `deploy/nginx-cdot-stations.conf`** (gzip for JSON, JavaScript and CSS, level 5). nginx's default only compresses HTML, so before this the 106 KB locations response crossed the network uncompressed. Measured against the live app, with compression it sends 15.6 KB (7x less), `app.js` 3.5 KB (from 9.8), `/api/stations` 2.0 KB (from 9.8). It costs no measurable throughput because the app, not nginx, is the bottleneck, and clients that don't ask for gzip still get plain responses. It takes effect on the server once you re-run `bash scripts/install-nginx-site.sh`.
+
+Not fixed, in order of value:
+1. **Static files have no `Cache-Control`, `ETag` or `Last-Modified`**, so every page load refetches the ~17 KB (about 6 KB compressed). Cheap to add if it ever matters.
+2. **Summaries are recomputed on every request** (about 1,000 rows filtered per station), although the data is read-only at runtime. A cache would be trivial and is unnecessary at this traffic.
 
 ### Measuring it yourself
 
@@ -291,7 +294,7 @@ The container only listens on `127.0.0.1:3000`. `deploy/nginx-cdot-stations.conf
 bash scripts/install-nginx-site.sh   # sudo: copies the site into sites-available, enables it, runs nginx -t, reloads
 ```
 
-It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open **http://192.168.0.20:8080** (the server's wired address; the Wi-Fi address `192.168.0.91` works too). Both come from DHCP and can change, so a reservation in your router keeps them stable. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`).
+The site also gzips JSON, JavaScript and CSS. It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open **http://192.168.0.20:8080** (the server's wired address; the Wi-Fi address `192.168.0.91` works too). Both come from DHCP and can change, so a reservation in your router keeps them stable. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`).
 
 ## Backups
 

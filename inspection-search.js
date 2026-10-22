@@ -21,6 +21,9 @@ const COLUMNS = [
   'insp_carrier_state', 'dot_number',
 ];
 
+// Out-of-service filter: a fixed list, each mapped to the column it tests (never built from input).
+const OOS_COLUMNS = { any: 'oos_total', vehicle: 'vehicle_oos_total', driver: 'driver_oos_total' };
+
 export class SearchError extends Error {}
 
 const isDate = (s) => {
@@ -48,22 +51,25 @@ export function parseSearch(params) {
     const set = [...new Set(lv.split(','))].sort();
     levels = set.length === 5 ? '' : set.join(',');
   }
+  const oos = params.get('oos') ?? '';
+  if (oos && !Object.hasOwn(OOS_COLUMNS, oos)) throw new SearchError('oos must be any, vehicle or driver');
   const raw = params.get('offset') ?? '0';
   if (!/^\d{1,4}$/.test(raw)) throw new SearchError(`offset must be a whole number from 0 to ${MAX_OFFSET}`);
   const offset = Number(raw);
   if (offset > MAX_OFFSET || offset % PAGE_SIZE !== 0) throw new SearchError(`offset must be a multiple of ${PAGE_SIZE} up to ${MAX_OFFSET}`);
   if (!q && !from && !to) throw new SearchError('enter a place or carrier, or a date range');
-  return { q, from, to, levels, offset };
+  return { q, from, to, levels, oos, offset };
 }
 
 const quote = (s) => `'${s.replaceAll("'", "''")}'`;
 
-export function buildUrl({ q, from, to, levels = '', offset }, limit = PAGE_SIZE + 1) {
+export function buildUrl({ q, from, to, levels = '', oos = '', offset }, limit = PAGE_SIZE + 1) {
   const where = ["report_state='CO'", "insp_facility='F'"];
   if (q) where.push(`(upper(location_desc) like ${quote(`%${q}%`)} OR upper(insp_carrier_name) like ${quote(`%${q}%`)})`);
   if (from) where.push(`insp_date >= ${quote(from.replaceAll('-', ''))}`);
   if (to) where.push(`insp_date <= ${quote(to.replaceAll('-', ''))}`);
   if (levels) where.push(`insp_level_id in(${levels.split(',').map((l) => quote(l)).join(',')})`);
+  if (oos) where.push(`${OOS_COLUMNS[oos]} != '0'`);
   const url = new URL(ENDPOINT);
   url.searchParams.set('$select', COLUMNS.join(','));
   url.searchParams.set('$where', where.join(' AND '));
@@ -104,7 +110,7 @@ export function shape(row) {
 export function createSearcher({ fetchImpl = fetch, now = Date.now } = {}) {
   const cache = new Map();
   return async (search) => {
-    const key = `${search.q}|${search.from}|${search.to}|${search.levels}|${search.offset}`;
+    const key = `${search.q}|${search.from}|${search.to}|${search.levels}|${search.oos}|${search.offset}`;
     const hit = cache.get(key);
     if (hit && hit.expires > now()) {
       cache.delete(key);
@@ -158,3 +164,59 @@ export async function exportAll(search, { fetchImpl = fetch } = {}) {
   }
   return { results: rows.slice(0, EXPORT_MAX).map(shape), truncated: rows.length > EXPORT_MAX };
 }
+
+// ---- MySQL dump -------------------------------------------------------------------------------------------------
+// A .sql file that creates an `inspections` table (if it isn't there) and loads the rows with REPLACE INTO, so loading
+// the same export twice, or an overlapping one later, updates rows instead of duplicating them.
+// Text goes in as a quoted literal built here: backslash, quote and control characters are escaped, and the file turns
+// off NO_BACKSLASH_ESCAPES for its own session so that escaping means the same thing wherever it is loaded.
+const sqlText = (v, max) => {
+  if (v === null || v === undefined || v === '') return 'NULL';
+  const t = String(v).slice(0, max)
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')   // no control characters at all (newlines, NUL, Ctrl-Z, ...)
+    .replaceAll('\\', '\\\\')
+    .replaceAll("'", "''");
+  return `'${t}'`;
+};
+const sqlInt = (v) => String(Number.isSafeInteger(v) && v >= 0 ? v : 0);
+const sqlDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v ?? '') ? `'${v}'` : 'NULL');
+const sqlTime = (v) => (/^\d{2}:\d{2}$/.test(v ?? '') && Number(v.slice(0, 2)) < 24 && Number(v.slice(3)) < 60 ? `'${v}:00'` : 'NULL');
+const sqlRow = (r) => `(${[
+  sqlText(r.id, 20), sqlDate(r.date), sqlTime(r.time), sqlText(r.place, 80), sqlText(r.level, 1), sqlText(r.levelName, 40),
+  sqlInt(r.violations), sqlInt(r.oos.total), sqlInt(r.oos.vehicle), sqlInt(r.oos.driver), sqlInt(r.oos.hazmat),
+  sqlText(r.carrier, 80), sqlText(r.city, 80), sqlText(r.state, 2), sqlText(r.dot, 10),
+].join(', ')})`;
+
+const SQL_BATCH = 500;
+export const toSql = (rows, { generatedAt = new Date() } = {}) => {
+  const out = [
+    `-- CDOT inspection stations: Colorado fixed-port inspections from FMCSA's Vehicle Inspection File`,
+    `-- ${rows.length} row${rows.length === 1 ? '' : 's'}, exported ${generatedAt.toISOString()}. Load with: mysql your_database < this_file.sql`,
+    `SET NAMES utf8mb4;`,
+    `SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '');`,
+    `CREATE TABLE IF NOT EXISTS inspections (`,
+    `  inspection_id VARCHAR(20) NOT NULL PRIMARY KEY,`,
+    `  inspected_on DATE NULL,`,
+    `  inspected_at TIME NULL,`,
+    `  place VARCHAR(80) NULL,`,
+    `  level CHAR(1) NULL,`,
+    `  level_name VARCHAR(40) NULL,`,
+    `  violations INT UNSIGNED NOT NULL DEFAULT 0,`,
+    `  oos_total INT UNSIGNED NOT NULL DEFAULT 0,`,
+    `  oos_vehicle INT UNSIGNED NOT NULL DEFAULT 0,`,
+    `  oos_driver INT UNSIGNED NOT NULL DEFAULT 0,`,
+    `  oos_hazmat INT UNSIGNED NOT NULL DEFAULT 0,`,
+    `  carrier VARCHAR(80) NULL,`,
+    `  city VARCHAR(80) NULL,`,
+    `  state CHAR(2) NULL,`,
+    `  dot_number VARCHAR(10) NULL,`,
+    `  KEY (inspected_on), KEY (place), KEY (dot_number)`,
+    `) DEFAULT CHARSET=utf8mb4;`,
+  ];
+  const usable = rows.filter((r) => /^\d{1,20}$/.test(r.id ?? '')); // the primary key must be present
+  for (let i = 0; i < usable.length; i += SQL_BATCH) {
+    out.push('REPLACE INTO inspections (inspection_id, inspected_on, inspected_at, place, level, level_name, violations, oos_total, oos_vehicle, oos_driver, oos_hazmat, carrier, city, state, dot_number) VALUES');
+    out.push(usable.slice(i, i + SQL_BATCH).map(sqlRow).join(',\n') + ';');
+  }
+  return out.join('\n') + '\n';
+};

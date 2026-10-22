@@ -7,7 +7,7 @@ import { Store } from './store.js';
 import { importStatuses } from './importer.js';
 import { summarize } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
-import { parseSearch, createSearcher, exportAll, toCsv, EXPORT_MAX, SearchError } from './inspection-search.js';
+import { parseSearch, createSearcher, exportAll, toCsv, toSql, EXPORT_MAX, SearchError } from './inspection-search.js';
 import { FailureLimiter, RateLimiter, tokenMatches } from './auth.js';
 import { Members } from './members.js';
 import { loadStripeConfig, createCheckoutSession, fetchOffer, describeOffer, termOf, verifyWebhook, StripeError, PRODUCT } from './stripe.js';
@@ -258,7 +258,8 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         return json(res, 200, summarizeLocations(locations, { levels, period }));
       }
 
-      if (pathname === '/api/inspection-search.csv') {
+      if (pathname === '/api/inspection-search.csv' || pathname === '/api/inspection-search.sql') {
+        const sql = pathname.endsWith('.sql');
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
         if (req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, { error: 'cross-site requests are not allowed' });
         let search;
@@ -280,14 +281,14 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
           return json(res, 502, { error: 'inspection search is unavailable right now' });
         }
         res.writeHead(200, {
-          'content-type': 'text/csv; charset=utf-8',
-          'content-disposition': `attachment; filename="inspections-${new Date().toISOString().slice(0, 10)}.csv"`,
+          'content-type': sql ? 'application/sql; charset=utf-8' : 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="inspections-${new Date().toISOString().slice(0, 10)}.${sql ? 'sql' : 'csv'}"`,
           'cache-control': 'no-store',
           'x-export-rows': String(found.results.length),
           'x-export-truncated': found.truncated ? '1' : '0',
           'x-export-max': String(EXPORT_MAX),
         });
-        return res.end(toCsv(found.results));
+        return res.end(sql ? toSql(found.results) : toCsv(found.results));
       }
 
       if (pathname === '/api/inspection-search') {

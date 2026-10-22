@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { createApp } from '../server.js';
-import { parseSearch, buildUrl, shape, createSearcher, exportAll, toCsv, SearchError, PAGE_SIZE, EXPORT_MAX } from '../inspection-search.js';
+import { parseSearch, buildUrl, shape, createSearcher, exportAll, toCsv, toSql, SearchError, PAGE_SIZE, EXPORT_MAX } from '../inspection-search.js';
 import { RateLimiter } from '../auth.js';
 
 const params = (o) => new URLSearchParams(o);
@@ -17,8 +17,8 @@ const row = (n, extra = {}) => ({
 
 test('parseSearch normalises a good search', () => {
   assert.deepEqual(parseSearch(params({ q: '  fort   collins ', from: '2026-01-01', to: '2026-01-31', offset: '50' })),
-    { q: 'FORT COLLINS', from: '2026-01-01', to: '2026-01-31', levels: '', offset: 50 });
-  assert.deepEqual(parseSearch(params({ from: '2026-01-01' })), { q: '', from: '2026-01-01', to: '', levels: '', offset: 0 });
+    { q: 'FORT COLLINS', from: '2026-01-01', to: '2026-01-31', levels: '', oos: '', offset: 50 });
+  assert.deepEqual(parseSearch(params({ from: '2026-01-01' })), { q: '', from: '2026-01-01', to: '', levels: '', oos: '', offset: 0 });
 });
 
 test('parseSearch refuses anything that is not a plain, bounded search', () => {
@@ -26,7 +26,7 @@ test('parseSearch refuses anything that is not a plain, bounded search', () => {
     {}, { q: 'a' }, { q: 'x'.repeat(41) }, { q: "a%b" }, { q: 'a_b' }, { q: 'a;b' }, { q: 'a"b' }, { q: 'a\\b' },
     { q: 'ok', from: '2026-02-30' }, { q: 'ok', from: '1999-12-31' }, { q: 'ok', to: 'yesterday' },
     { q: 'ok', from: '2026-02-01', to: '2026-01-01' },
-    { q: 'ok', levels: '6' }, { q: 'ok', levels: '0' }, { q: 'ok', levels: '1,' }, { q: 'ok', levels: '1;2' }, { q: 'ok', levels: "1'" }, { q: 'ok', levels: '1,2,3,4,5,1' }, { q: 'ok', offset: '-50' }, { q: 'ok', offset: '25' }, { q: 'ok', offset: '1050' }, { q: 'ok', offset: '1e2' }, { q: 'ok', offset: 'x' },
+    { q: 'ok', oos: 'all' }, { q: 'ok', oos: 'toString' }, { q: 'ok', oos: "any'" }, { q: 'ok', levels: '6' }, { q: 'ok', levels: '0' }, { q: 'ok', levels: '1,' }, { q: 'ok', levels: '1;2' }, { q: 'ok', levels: "1'" }, { q: 'ok', levels: '1,2,3,4,5,1' }, { q: 'ok', offset: '-50' }, { q: 'ok', offset: '25' }, { q: 'ok', offset: '1050' }, { q: 'ok', offset: '1e2' }, { q: 'ok', offset: 'x' },
   ];
   for (const b of bad) assert.throws(() => parseSearch(params(b)), SearchError, JSON.stringify(b));
 });
@@ -99,7 +99,7 @@ test('GET /api/inspection-search: results, validation, method, failure and rate 
   assert.equal(ok.status, 200);
   assert.equal(ok.headers.get('cache-control'), 'no-store');
   assert.equal((await ok.json()).results[0].place, 'FORT COLLINS POE NB');
-  assert.deepEqual(seen[0], { q: 'COLLINS', from: '2026-01-01', to: '', levels: '', offset: 0 });
+  assert.deepEqual(seen[0], { q: 'COLLINS', from: '2026-01-01', to: '', levels: '', oos: '', offset: 0 });
 
   assert.equal((await fetch(`${base}/api/inspection-search`)).status, 400);
   assert.equal((await fetch(`${base}/api/inspection-search?q=a%25b`)).status, 400);
@@ -121,11 +121,11 @@ test('the page wires the search in: script loaded after app.js, cached by the se
   const read = (f) => readFile(new URL(`../public/${f}`, import.meta.url), 'utf8');
   const html = await read('index.html');
   assert.ok(html.includes('src="search.js"') && html.indexOf('src="search.js"') > html.indexOf('src="app.js"'));
-  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 's-csv', 'search-form', 'class="s-level"']) {
+  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 's-csv', 's-sql', 's-oos', 'search-form', 'class="s-level"']) {
     assert.ok(html.includes(id.startsWith('class') ? id : `id="${id}"`), id);
   }
   assert.match(await read('sw.js'), /'\/search\.js'/);
-  assert.match(await read('search.js'), /\/api\/inspection-search\.csv/);
+  assert.match(await read('search.js'), /\/api\/inspection-search\.\$\{ext\}/);
 });
 
 test('level filter: normalised, all five means none, and it reaches the query as quoted values', () => {
@@ -144,4 +144,65 @@ test('a different level filter is a different cache entry', async () => {
   await searcher(parseSearch(params({ q: 'ok', levels: '3' })));
   await searcher(parseSearch(params({ q: 'ok', levels: '1' })));
   assert.equal(calls, 2);
+});
+
+test('out-of-service filter: only the three known choices, each testing its own fixed column', () => {
+  const where = (oos) => buildUrl(parseSearch(params({ q: 'ok', oos }))).searchParams.get('$where');
+  assert.ok(where('any').endsWith("AND oos_total != '0'"));
+  assert.ok(where('vehicle').endsWith("AND vehicle_oos_total != '0'"));
+  assert.ok(where('driver').endsWith("AND driver_oos_total != '0'"));
+  assert.ok(!where('').includes('oos_total'));
+  assert.equal(parseSearch(params({ q: 'ok', oos: 'driver' })).oos, 'driver');
+});
+
+test('a different out-of-service filter is a different cache entry', async () => {
+  let calls = 0;
+  const searcher = createSearcher({ fetchImpl: async () => { calls++; return { ok: true, json: async () => [] }; } });
+  for (const oos of ['driver', 'vehicle', 'driver']) await searcher(parseSearch(params({ q: 'ok', oos })));
+  assert.equal(calls, 2);
+});
+
+test('toSql: creates the table, escapes text, skips rows without a usable id, batches', () => {
+  const base = shape(row(1));
+  const rows = [
+    { ...base, id: '1', place: "O'BRIEN \\ x", carrier: "x'); DROP TABLE inspections; --", city: 'A\nB\0C\u001a' },
+    { ...base, id: '2', date: null, time: null, level: '' },
+    { ...base, id: "3'; DROP", place: 'never loaded' },
+    { ...base, id: '', place: 'never loaded' },
+  ];
+  const sql = toSql(rows, { generatedAt: new Date('2026-10-22T00:00:00Z') });
+  assert.ok(sql.startsWith('-- CDOT inspection stations'));
+  assert.ok(sql.includes('exported 2026-10-22T00:00:00.000Z'));
+  assert.ok(sql.includes("SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '');"));
+  assert.ok(sql.includes('CREATE TABLE IF NOT EXISTS inspections ('));
+  assert.ok(sql.includes("'O''BRIEN \\\\ x'"));                                   // quote doubled, backslash doubled
+  assert.ok(sql.includes("'x''); DROP TABLE inspections; --'"));                // the quote can't end the literal
+  assert.ok(sql.includes("'A B C '"));                                           // newline, NUL and Ctrl-Z become spaces
+  assert.ok(!sql.includes('never loaded'));
+  assert.ok(/\('2', NULL, NULL, /.test(sql));
+  assert.equal(sql.match(/^REPLACE INTO/gm).length, 1);
+  assert.equal(sql.includes('\0'), false);
+
+  const big = Array.from({ length: 1201 }, (_, i) => shape(row(i)));
+  assert.equal(toSql(big).match(/^REPLACE INTO/gm).length, 3);                   // 500 + 500 + 201
+});
+
+test('GET /api/inspection-search.sql: a .sql download with the same rules as the CSV', async (t) => {
+  const seen = [];
+  const base = await start(t, {
+    exportImpl: async (s) => { seen.push(s); return { results: [shape(row(1)), shape(row(2))], truncated: false }; },
+    exportLimiter: new RateLimiter({ max: 2, windowMs: 60_000 }),
+  });
+  const ok = await fetch(`${base}/api/inspection-search.sql?q=collins&levels=3&oos=vehicle`);
+  assert.equal(ok.status, 200);
+  assert.match(ok.headers.get('content-type'), /^application\/sql/);
+  assert.match(ok.headers.get('content-disposition'), /^attachment; filename="inspections-\d{4}-\d{2}-\d{2}\.sql"$/);
+  assert.equal(ok.headers.get('x-export-rows'), '2');
+  assert.match(await ok.text(), /REPLACE INTO inspections/);
+  assert.deepEqual(seen[0], { q: 'COLLINS', from: '', to: '', levels: '3', oos: 'vehicle', offset: 0 });
+  assert.equal((await fetch(`${base}/api/inspection-search.sql`)).status, 400);
+  assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`, { method: 'POST' })).status, 405);
+  assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`, { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
+  assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`)).status, 200);        // 2nd allowed
+  assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`)).status, 429);        // shares the export allowance with the CSV
 });

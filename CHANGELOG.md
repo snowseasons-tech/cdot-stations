@@ -47,6 +47,7 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - The nginx site compresses JSON, JavaScript and CSS responses (the map data goes from 106 KB to about 16 KB). Applies when `scripts/install-nginx-site.sh` is re-run on the server.
 
 ### Fixed
+- Static files (the page, scripts, styles, icons) are now sent with an ETag, `Cache-Control: no-cache` and `CDN-Cache-Control: no-store`. Before, Cloudflare and phones kept serving old copies for hours after a deploy, so new features didn't appear (the Follow buttons never showed on a phone running an old `app.js`).
 - Simultaneous status updates no longer fail: disk writes are queued, so overlapping updates can't race on the temporary file (previously all but one of a burst of concurrent updates returned an error, though the data was still saved).
 
 ### Known limitations

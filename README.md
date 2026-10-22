@@ -205,9 +205,10 @@ With nginx compression enabled (see below) a visitor receives the gzip column fr
 
 **Compression is configured in `deploy/nginx-cdot-stations.conf`** (gzip for JSON, JavaScript and CSS, level 5). nginx's default only compresses HTML, so before this the 106 KB locations response crossed the network uncompressed. Measured against the live app, with compression it sends 15.6 KB (7x less), `app.js` 3.5 KB (from 9.8), `/api/stations` 2.0 KB (from 9.8). It costs no measurable throughput because the app, not nginx, is the bottleneck, and clients that don't ask for gzip still get plain responses. It takes effect on the server once you re-run `bash scripts/install-nginx-site.sh`.
 
-Not fixed, in order of value:
-1. **Static files have no `Cache-Control`, `ETag` or `Last-Modified`**, so every page load refetches the ~17 KB (about 6 KB compressed). Cheap to add if it ever matters.
-2. **Summaries are recomputed on every request** (about 1,000 rows filtered per station), although the data is read-only at runtime. A cache would be trivial and is unnecessary at this traffic.
+**Static files are revalidated, not cached blindly.** Every static file is sent with an `ETag` and `Cache-Control: no-cache` (browsers re-check each load and get a tiny `304 Not Modified` when unchanged), and `CDN-Cache-Control: no-store` so Cloudflare keeps no copy. This was added after a real problem: with no cache instructions at all, Cloudflare and phones kept serving an old `app.js` for hours after a deploy, so new features simply didn't appear. Speed was never the issue; serving the right version is.
+
+Not fixed:
+1. **Summaries are recomputed on every request** (about 1,000 rows filtered per station), although the data is read-only at runtime. A cache would be trivial and is unnecessary at this traffic.
 
 ### Measuring it yourself
 
@@ -574,6 +575,8 @@ Commands that mention `docker` need a user in the `docker` group. In a session s
 - Tiles load from OpenStreetMap and need internet access and a Referer; don't set a `no-referrer` policy.
 
 **Inspection numbers look old or low.** The newest month is partial (FMCSA data arrives late). Check `through` in `data/inspections.json`, and run the refresh on demand: `gh workflow run refresh-data.yml`. A refresh that fails with `refusing to overwrite` or `more than 20% fewer` is the safety net working: look at the source, and if the new data is right, run `FORCE=1 npm run sync:inspections` (or `sync:locations`, `sync`) locally, review the diff, and commit. `CDOT's layer no longer lists ...` means a station disappeared from CDOT's layer; its id keys saved statuses, so confirm before forcing.
+
+**The app behaves like an old version after an update** (a new button or feature doesn't appear). A cache is serving old files. Static files now tell browsers and Cloudflare to re-check every time, so this should only affect copies stored *before* that fix (or if the headers are ever removed). To clear it: in the Cloudflare dashboard, Caching, then Configuration, then **Purge Cache**, choose a custom purge for the hostname `stations.snowseasonstech.net` (or the specific files), then fully close and reopen the app on the phone. To see whether a phone is getting fresh files, check the nginx access log: after a deploy, `GET /app.js` should appear in it when someone opens the app, with status 200 or 304. If a phone loads the page but never requests `app.js`, something is caching it.
 
 **Notifications don't arrive.**
 - *No Follow buttons:* on an iPhone, notifications work only in the installed Home Screen app, never in a browser tab (Safari or Chrome). In a tab the page says so and how to install; open the app from its icon instead (it has no address bar). The server log tells which you were in: a Home Screen app's user agent has no `Safari/` part. On an iPhone older than iOS 16.4 the page says to update. If the page says nothing at all, the server has no push keys (below). Check the server with `curl -s localhost:8080/api/push/key`: `503 push notifications are not configured` means set the `VAPID_*` values and redeploy. To see what a phone actually did, filter the nginx access log (`/var/log/nginx/access.log`) by its user agent: a working follow shows `GET /api/push/key` then `POST /api/push/subscribe` with status 200.

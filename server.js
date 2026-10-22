@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -164,9 +165,17 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       if (!file.startsWith(PUBLIC + '/')) return json(res, 403, { error: 'forbidden' });
       const body = await readFile(file).catch(() => null);
       if (!body) return json(res, 404, { error: 'not found' });
-      // The service worker script must always be re-checked so an update reaches installed apps promptly.
-      const extra = rel === '/sw.js' ? { 'cache-control': 'no-cache' } : {};
-      res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', ...extra });
+      // Static files are never cached without checking: a copy kept by a browser or by Cloudflare would keep serving
+      // an old version of the app after a deploy (phones were running a stale app.js for hours). `no-cache` means
+      // "re-check every time", and the ETag makes that check cheap (304 when unchanged); CDN-Cache-Control tells
+      // Cloudflare not to store its own copy at all.
+      const etag = `"${createHash('sha1').update(body).digest('base64url').slice(0, 22)}"`;
+      const caching = { 'cache-control': 'no-cache', 'cdn-cache-control': 'no-store', etag };
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304, caching);
+        return res.end();
+      }
+      res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', ...caching });
       res.end(body);
     } catch (e) {
       if (e instanceof LimitReached) return json(res, 503, { error: e.message });

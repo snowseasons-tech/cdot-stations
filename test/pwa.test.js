@@ -238,3 +238,25 @@ test('install.js loads before follow.js (follow.js uses its platform helpers to 
   assert.ok(html.indexOf('src="install.js"') !== -1 && html.indexOf('src="install.js"') < html.indexOf('src="follow.js"'));
   assert.match(html, /id="notify-toggle"/); // the toggle that is hidden when only the install hint is shown
 });
+
+test('static files are always re-checked: ETag, no-cache for browsers, no-store for Cloudflare, 304 when unchanged', async (t) => {
+  const base = await start(t);
+  for (const path of ['/', '/app.js', '/follow.js', '/styles.css', '/sw.js', '/manifest.webmanifest', '/icons/icon-192.png']) {
+    const r = await fetch(base + path);
+    assert.equal(r.status, 200, path);
+    assert.equal(r.headers.get('cache-control'), 'no-cache', path);
+    assert.equal(r.headers.get('cdn-cache-control'), 'no-store', path); // Cloudflare must not keep its own copy
+    assert.match(r.headers.get('etag'), /^"[A-Za-z0-9_-]{22}"$/, path);
+  }
+  const first = await fetch(`${base}/app.js`);
+  const etag = first.headers.get('etag');
+  assert.equal((await fetch(`${base}/app.js`)).headers.get('etag'), etag); // stable for the same content
+
+  const unchanged = await fetch(`${base}/app.js`, { headers: { 'if-none-match': etag } });
+  assert.equal(unchanged.status, 304);
+  assert.equal((await unchanged.text()), ''); // nothing re-sent
+  assert.equal(unchanged.headers.get('cache-control'), 'no-cache');
+  const changed = await fetch(`${base}/app.js`, { headers: { 'if-none-match': '"something-old"' } });
+  assert.equal(changed.status, 200);
+  assert.notEqual((await fetch(`${base}/follow.js`)).headers.get('etag'), etag); // different content, different tag
+});

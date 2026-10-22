@@ -5,26 +5,6 @@
   const dialog = $('search');
   if (!dialog) return;
 
-  const loaded = []; // every result shown so far, kept so it can be exported
-
-  const COLUMNS = [
-    ['Date', (r) => r.date], ['Time', (r) => r.time], ['Place', (r) => r.place], ['Level', (r) => r.level],
-    ['Level name', (r) => r.levelName], ['Violations', (r) => r.violations], ['Out of service', (r) => r.oos.total],
-    ['Vehicle OOS', (r) => r.oos.vehicle], ['Driver OOS', (r) => r.oos.driver], ['Hazmat OOS', (r) => r.oos.hazmat],
-    ['Carrier', (r) => r.carrier], ['City', (r) => r.city], ['State', (r) => r.state], ['DOT number', (r) => r.dot],
-    ['Inspection ID', (r) => r.id],
-  ];
-
-  // One CSV cell. Text starting with = + - @ (or a tab/CR) would be run as a formula by Excel and Sheets, and carrier
-  // names are other people's text, so those get a leading apostrophe. Quotes are doubled and the cell is quoted.
-  const cell = (v) => {
-    let t = v === null || v === undefined ? '' : String(v);
-    if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;
-    return `"${t.replaceAll('"', '""')}"`;
-  };
-  const toCsv = (rows) => [COLUMNS.map(([name]) => cell(name)).join(','), ...rows.map((r) => COLUMNS.map(([, get]) => cell(get(r))).join(','))].join('\r\n') + '\r\n';
-  if (typeof globalThis.__searchExports === 'object') globalThis.__searchExports.toCsv = toCsv; // lets the tests reach it
-
   let latest = 0; // a slower, older answer must not overwrite a newer one
   let query = null;
   let shown = 0;
@@ -69,7 +49,7 @@
     const mine = ++latest;
     const p = offset === 0 ? params(0) : query;
     if (offset > 0) p.set('offset', String(offset));
-    if (offset === 0) { query = p; shown = 0; loaded.length = 0; $('s-results').replaceChildren(); }
+    if (offset === 0) { query = p; shown = 0; $('s-results').replaceChildren(); }
     $('s-more').hidden = true;
     $('s-csv').hidden = true;
     $('s-status').textContent = 'Searching...';
@@ -85,8 +65,7 @@
       if (!res.ok) throw new Error(String(res.status));
       $('s-results').append(...body.results.map(row));
       shown += body.results.length;
-      loaded.push(...body.results);
-      $('s-csv').hidden = !loaded.length;
+      $('s-csv').hidden = !shown;
       $('s-status').textContent = shown ? `Showing ${shown} inspection${shown === 1 ? '' : 's'}, newest first.` : 'No inspections matched.';
       $('s-more').hidden = !body.hasMore || offset + body.pageSize > 1000;
       if (body.hasMore && offset + body.pageSize > 1000) $('s-status').textContent += ' Narrow the dates to see older ones.';
@@ -102,12 +81,36 @@
   $('s-close').addEventListener('click', () => dialog.close());
   $('search-form').addEventListener('submit', (event) => { event.preventDefault(); run(0); });
   $('s-more').addEventListener('click', () => run(shown));
-  $('s-csv').addEventListener('click', () => {
-    const url = URL.createObjectURL(new Blob(['\ufeff', toCsv(loaded)], { type: 'text/csv;charset=utf-8' })); // BOM so Excel reads UTF-8
-    const a = el('a', { href: url, download: `inspections-${new Date().toISOString().slice(0, 10)}.csv` });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // Downloads every match (the server caps it), not just what is on screen. Fetched rather than linked so an expired
+  // sign-in or an error shows a message instead of saving a web page as a .csv file.
+  $('s-csv').addEventListener('click', async () => {
+    if (!query) return;
+    const p = new URLSearchParams(query);
+    p.delete('offset');
+    $('s-csv').disabled = true;
+    const was = $('s-status').textContent;
+    $('s-status').textContent = 'Preparing the CSV...';
+    try {
+      const res = await fetch(`/api/inspection-search.csv?${p}`, { redirect: 'manual' });
+      if (res.type === 'opaqueredirect') throw Object.assign(new Error('expired'), { expired: true });
+      if (res.status === 429) { $('s-status').textContent = 'Too many exports. Wait a moment and try again.'; return; }
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = el('a', { href: url, download: `inspections-${new Date().toISOString().slice(0, 10)}.csv` });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const rows = res.headers.get('x-export-rows');
+      $('s-status').textContent = res.headers.get('x-export-truncated') === '1'
+        ? `Saved the newest ${rows} matches. There are more: narrow the dates to get the rest.`
+        : `Saved all ${rows} matching inspections.`;
+    } catch (e) {
+      $('s-status').textContent = e.expired ? 'Your sign-in has expired. Reload the page to sign in again.' : 'Could not prepare the CSV.';
+      if (!e.expired && was) setTimeout(() => { if ($('s-status').textContent === 'Could not prepare the CSV.') $('s-status').textContent = was; }, 4000);
+    } finally {
+      $('s-csv').disabled = false;
+    }
   });
 })();

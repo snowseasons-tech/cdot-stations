@@ -7,7 +7,7 @@ import { Store } from './store.js';
 import { importStatuses } from './importer.js';
 import { summarize } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
-import { parseSearch, createSearcher, SearchError } from './inspection-search.js';
+import { parseSearch, createSearcher, exportAll, toCsv, EXPORT_MAX, SearchError } from './inspection-search.js';
 import { FailureLimiter, RateLimiter, tokenMatches } from './auth.js';
 import { Members } from './members.js';
 import { loadStripeConfig, createCheckoutSession, fetchOffer, describeOffer, termOf, verifyWebhook, StripeError, PRODUCT } from './stripe.js';
@@ -47,7 +47,8 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
   membersFile = process.env.MEMBERS_FILE ?? join(ROOT, 'data/members.json'),
   stripeConfig = loadStripeConfig(), stripeFetch = fetch, joinLimiter = new RateLimiter({ max: 10, windowMs: 60_000 }),
   pushConfig = loadPushConfig(), pushSender, pushLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }),
-  searchImpl = createSearcher(), searchLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }) } = {}) {
+  searchImpl = createSearcher(), searchLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }),
+  exportImpl = exportAll, exportLimiter = new RateLimiter({ max: 5, windowMs: 60_000 }) } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
   const locations = await readFile(locationsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
@@ -255,6 +256,38 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         if (!levels) return json(res, 400, { error: 'levels must be a comma-separated list of 1-5' });
         if (!PERIODS.includes(period)) return json(res, 400, { error: `period must be one of ${PERIODS.join(', ')}` });
         return json(res, 200, summarizeLocations(locations, { levels, period }));
+      }
+
+      if (pathname === '/api/inspection-search.csv') {
+        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
+        if (req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, { error: 'cross-site requests are not allowed' });
+        let search;
+        try {
+          search = parseSearch(new URL(req.url, 'http://x').searchParams);
+        } catch (e) {
+          if (e instanceof SearchError) return json(res, 400, { error: e.message });
+          throw e;
+        }
+        const wait = exportLimiter.allow(clientOf(req));
+        if (wait) {
+          res.setHeader('retry-after', String(wait));
+          return json(res, 429, { error: 'too many exports; try again shortly' });
+        }
+        let found;
+        try {
+          found = await exportImpl(search);
+        } catch {
+          return json(res, 502, { error: 'inspection search is unavailable right now' });
+        }
+        res.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="inspections-${new Date().toISOString().slice(0, 10)}.csv"`,
+          'cache-control': 'no-store',
+          'x-export-rows': String(found.results.length),
+          'x-export-truncated': found.truncated ? '1' : '0',
+          'x-export-max': String(EXPORT_MAX),
+        });
+        return res.end(toCsv(found.results));
       }
 
       if (pathname === '/api/inspection-search') {

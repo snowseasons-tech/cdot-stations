@@ -10,6 +10,8 @@ import { LEVELS } from './inspections.js';
 const ENDPOINT = 'https://data.transportation.gov/resource/fx4q-ay7w.json';
 export const PAGE_SIZE = 50;
 export const MAX_OFFSET = 1000;
+export const EXPORT_MAX = 10_000;
+const EXPORT_TIMEOUT_MS = 25_000;
 const CACHE_MS = 10 * 60_000;
 const CACHE_MAX = 200;
 const TIMEOUT_MS = 8_000;
@@ -48,7 +50,7 @@ export function parseSearch(params) {
 
 const quote = (s) => `'${s.replaceAll("'", "''")}'`;
 
-export function buildUrl({ q, from, to, offset }) {
+export function buildUrl({ q, from, to, offset }, limit = PAGE_SIZE + 1) {
   const where = ["report_state='CO'", "insp_facility='F'"];
   if (q) where.push(`(upper(location_desc) like ${quote(`%${q}%`)} OR upper(insp_carrier_name) like ${quote(`%${q}%`)})`);
   if (from) where.push(`insp_date >= ${quote(from.replaceAll('-', ''))}`);
@@ -57,7 +59,7 @@ export function buildUrl({ q, from, to, offset }) {
   url.searchParams.set('$select', COLUMNS.join(','));
   url.searchParams.set('$where', where.join(' AND '));
   url.searchParams.set('$order', 'insp_date DESC, insp_start_time DESC, inspection_id DESC');
-  url.searchParams.set('$limit', String(PAGE_SIZE + 1)); // one extra row tells us whether there is another page
+  url.searchParams.set('$limit', String(limit)); // one extra row tells us whether there is another page
   url.searchParams.set('$offset', String(offset));
   return url;
 }
@@ -114,4 +116,36 @@ export function createSearcher({ fetchImpl = fetch, now = Date.now } = {}) {
     while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
     return value;
   };
+}
+
+const COLUMNS_OUT = [
+  ['Date', (r) => r.date], ['Time', (r) => r.time], ['Place', (r) => r.place], ['Level', (r) => r.level],
+  ['Level name', (r) => r.levelName], ['Violations', (r) => r.violations], ['Out of service', (r) => r.oos.total],
+  ['Vehicle OOS', (r) => r.oos.vehicle], ['Driver OOS', (r) => r.oos.driver], ['Hazmat OOS', (r) => r.oos.hazmat],
+  ['Carrier', (r) => r.carrier], ['City', (r) => r.city], ['State', (r) => r.state], ['DOT number', (r) => r.dot],
+  ['Inspection ID', (r) => r.id],
+];
+
+// One CSV cell. Text starting with = + - @ (or a tab/CR) would be run as a formula by Excel and Sheets, and carrier
+// names are other people's text, so those get a leading apostrophe. Quotes are doubled and the cell is quoted.
+const cell = (v) => {
+  let t = v === null || v === undefined ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+  return `"${t.replaceAll('"', '""')}"`;
+};
+
+export const toCsv = (rows) => '\ufeff' + [COLUMNS_OUT.map(([name]) => cell(name)).join(','), ...rows.map((r) => COLUMNS_OUT.map(([, get]) => cell(get(r))).join(','))].join('\r\n') + '\r\n'; // BOM so Excel reads UTF-8
+
+// Every match (newest first), up to EXPORT_MAX, as shaped rows. `truncated` says there were more than that.
+export async function exportAll(search, { fetchImpl = fetch } = {}) {
+  let rows;
+  try {
+    const res = await fetchImpl(buildUrl({ ...search, offset: 0 }, EXPORT_MAX + 1), { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(EXPORT_TIMEOUT_MS) });
+    if (!res.ok) throw new Error('bad status');
+    rows = await res.json();
+    if (!Array.isArray(rows)) throw new Error('bad shape');
+  } catch {
+    throw new Error('upstream');
+  }
+  return { results: rows.slice(0, EXPORT_MAX).map(shape), truncated: rows.length > EXPORT_MAX };
 }

@@ -39,6 +39,25 @@
   </aside>
   <main>
     <aside id="side">
+      <aside id="mover" class="mover" aria-label="Move a station's pin" hidden>
+        <strong id="mover-title"></strong>
+        <p class="sub">Tap the map where the station is now, or drag the orange pin.</p>
+        <label>Pin <select id="mv-direction"></select></label>
+        <div class="mv-coords">
+          <label>Latitude <input id="mv-lat" inputmode="decimal" autocomplete="off"></label>
+          <label>Longitude <input id="mv-lng" inputmode="decimal" autocomplete="off"></label>
+        </div>
+        <p id="mv-info" class="sub" aria-live="polite"></p>
+        <label>What you saw (optional) <textarea id="mv-note" maxlength="280" rows="2" placeholder="e.g. new building, 0.3 mile north"></textarea></label>
+        <label id="mv-token-row" hidden>Write token <input id="mv-token" type="password" autocomplete="off"></label>
+        <p id="mv-error" class="error" role="alert"></p>
+        <div class="actions">
+          <button id="mv-save" type="button">Save position</button>
+          <button id="mv-revert" type="button" hidden>Put back to CDOT's</button>
+          <button id="mv-history" type="button">History</button>
+          <button id="mv-cancel" type="button">Cancel</button>
+        </div>
+      </aside>
       <section id="notify" aria-label="Notifications" hidden>
         <label class="toggle" id="notify-toggle"><input type="checkbox" id="notify-all"> <strong>Notify me about every station</strong></label>
         <p id="notify-note" class="sub" aria-live="polite"></p>
@@ -76,6 +95,11 @@
       <menu><button value="cancel">Cancel</button><button id="f-save" value="save">Save</button></menu>
     </form>
   </dialog>
+  <dialog id="pos-history">
+    <h2 id="pos-history-title"></h2>
+    <ul id="pos-history-list" class="popup-rows"></ul>
+    <menu><button id="pos-history-close" type="button">Close</button></menu>
+  </dialog>
   <dialog id="insp">
     <h2 id="insp-title"></h2>
     <label>Period
@@ -89,5 +113,6 @@
   <script src="app.js"></script>
   <script src="install.js"></script>
   <script src="follow.js"></script>
+  <script src="move.js"></script>
 </body>
 </html>

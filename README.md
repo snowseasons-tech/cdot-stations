@@ -85,6 +85,7 @@ The parts only meet through files and git: the data pipeline writes `data/*.json
 server.js ─► store.js ─► atomic-writer.js    status.json: current status per station + capped history
           ─► push.js ─► atomic-writer.js     followers (subscriptions.json), notifier, web-push sender
           ─► auth.js           constant-time token check, failed-attempt lockout
+          ─► positions.js ─► atomic-writer.js, geo.js   pins the team has moved (positions.json)
           ─► importer.js ─► store.js     validates and applies imported records
           ─► inspections.js            monthly rows ─► per-station summaries, OOS rates
           ─► inspection-locations.js ─► inspections.js     map points filtered by level and period
@@ -110,6 +111,7 @@ scripts/               ─ standalone; none import server code
 | `data/inspection-locations.json` | `{ source, fetchedAt, through, coverage, locations: [{ id, name, kind, lat, lng, levels }] }` |
 | `status.json` (volume) | `{ current: { <id>: { status, note, updatedAt, source } }, history: [ ... last 1000 ... ] }` |
 | `subscriptions.json` (volume) | `{ subscriptions: { <hash>: { endpoint, keys, stations: ['all'] or [ids], createdAt, updatedAt } } }`, one per phone (max 500) |
+| `positions.json` (volume) | `{ positions: { '<station>:<direction>': { lat, lng, note, savedAt, source } }, history: [ ... last 1000 ... ] }`, one entry per pin that has been moved |
 
 A station's `id` (a slug of its name) is the key everywhere: inspections and saved statuses refer to it, which is why the sync refuses to drop a station silently.
 
@@ -236,6 +238,7 @@ Benchmark a temporary instance, not the production container, and stop it by PID
 | `STATUS_TOKEN` | unset | If set, `PUT /api/stations/:id/status` and `POST /api/import` require `Authorization: Bearer <token>` |
 | `STATUS_FILE` | `data/status.json` | Where status and history are stored |
 | `SUBSCRIPTIONS_FILE` | `data/subscriptions.json` | Where push followers are stored |
+| `POSITIONS_FILE` | `data/positions.json` | Where saved (moved) station positions are stored |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | unset | Turn on push notifications (all three or none; see Notifications) |
 | `TRUST_PROXY` | unset | `1` = take the client address from the proxy's `X-Real-IP` (see Security) |
 | `ALLOW_OPEN_WRITES` | unset | `1` = allow listening on a non-local address without `STATUS_TOKEN` |
@@ -377,11 +380,11 @@ Then deploy (push a change, or re-run the workflow). The deploy writes the value
 
 ## Backups
 
-Station status and history, and the list of who follows which station, live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
+Station status and history, the list of who follows which station, and any pins the team has moved live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
 
 `scripts/backup-run.sh` (which calls `scripts/backup-status.sh`) runs **daily at 03:30 server time** from cron (installed with `bash scripts/install-backup-cron.sh`; remove it with `crontab -e`). Each run:
 
-1. reads `status.json` (and `subscriptions.json`, once anyone follows a station) from the running container (the app writes both atomically, so a copy is always consistent) and refuses to back up anything that isn't valid;
+1. reads `status.json` (and `subscriptions.json` and `positions.json`, once anyone follows a station or moves a pin) from the running container (the app writes both atomically, so a copy is always consistent) and refuses to back up anything that isn't valid;
 2. saves a timestamped copy in `~/cdot-stations/backups/` unless nothing changed, keeping at least the 7 newest and deleting the rest after 30 days;
 3. commits the same file to the private repo [snowseasons-tech/cdot-stations-backup](https://github.com/snowseasons-tech/cdot-stations-backup), so you also survive losing the machine, and git keeps every version. It also updates `heartbeat.txt` there on every successful run (a small commit a day, even when no statuses exist yet); use `git log -- status.json` to see only real data changes.
 
@@ -424,6 +427,7 @@ To change the schedule, edit the `cron` line. Bot commits go straight to `main`;
 |---|---|
 | **Status data** (who can change it) | Writes (`PUT .../status`, `POST /api/import`) need a bearer token, compared in constant time. After 10 failed attempts in a minute a client gets `429` and its token isn't checked again until the window passes. The server refuses to listen on a non-local address without a token. Input is validated (status must be open/closed/unknown, notes up to 280 characters, body size capped at 10 KB, 500 KB for imports), and for manual updates the server sets the source and time itself, so a caller can't forge them (an import may supply its own timestamp, but never one in the future, and it can't overwrite a newer status). |
 | **People using the page** (XSS and injection) | Notes and station names are put on the page as text, never as HTML. A Content-Security-Policy allows scripts only from this origin and unpkg (no inline scripts), connections only to this origin, and no framing; plus `nosniff`, a referrer policy and a permissions policy. API responses are `no-store`. Reads use no cookies, so there is no CSRF exposure: the token is sent in a header by the page's own code. |
+| **Saved positions** | Saving or reverting a pin needs the write token (the same check and lockout as status updates). A position must be inside Colorado and within 100 miles of CDOT's, which catches the usual typing mistakes, and notes are shown as text. Every change is kept in a history, so a wrong or malicious save can be seen and reverted. |
 | **Files on the server** | Static files are served only from `public/` (paths are normalized and must stay inside it). |
 | **Third-party code** | Leaflet loads from unpkg at an exact version with Subresource Integrity hashes, so a tampered file won't run (`npm test` enforces the pin and hashes). The one npm package, `web-push`, is pinned to an exact version with a committed lockfile, installed with scripts disabled (none of its 17 packages has an install script), and checked with `npm audit` (no known vulnerabilities when added); Dependabot opens weekly update PRs. |
 | **Push notifications** | A follower's push address must belong to a real push service (Google, Mozilla, Apple or Microsoft, over HTTPS, no ports or credentials), because the server sends requests to it; otherwise anyone could aim the server at the home network. The follow endpoints accept only `application/json` and refuse requests the browser marks cross-site, so another website can't forge a subscription from a team member's browser; they are rate limited (30 a minute per client) and capped at 500 subscriptions. Messages are encrypted so only the subscribed phone can read them, and the VAPID private key is a secret like the write token. |
@@ -461,6 +465,22 @@ openssl rand -hex 32 | gh secret set STATUS_TOKEN    # then re-run the deploy wo
 ```
 
 The deploy rewrites `~/cdot-stations/env` and restarts the container with the new value; update anything that calls the API (importers). Old tokens stop working immediately. Rotate whenever someone who knew it leaves, or if it may have been exposed.
+
+## Moving a station's pin
+
+CDOT's port locations come from a layer last published in 2019, and ports do get relocated. If you have seen that a station is somewhere else, you can save its new position; the map then shows it there.
+
+**To move a pin** (on the web page, with the write token; the installed phone app is read-only, so it has no Move pin button):
+1. Tap **Move pin** on the station's card. A panel opens and the map zooms to the pin.
+2. If the station has two pins (for example northbound and southbound, or eastbound and westbound), pick the one that moved from the **Pin** list.
+3. Tap the map where it is now, drag the orange pin, or type the latitude and longitude.
+4. Optionally say what you saw ("new building, 0.3 mile north"), enter the write token if asked, and tap **Save position**.
+
+**What you see afterwards.** The saved position replaces the pin on the map, drawn with a dashed ring. CDOT's original position stays as a small grey circle with a dashed line to the new one, and the popup says who moved it, when and why, and what CDOT lists. The station's card says its pin was corrected, and the circle for that port on the inspection-locations map moves with its pins. **History** in the panel lists every save and revert, and **Put back to CDOT's** returns the pin to CDOT's position. When CDOT's own data later matches the saved position, the popup says "now matches" and you can put it back.
+
+**Rules.** A new position must be inside Colorado and within 100 miles of CDOT's, because the usual mistake is a swapped latitude and longitude or a missing minus sign; the panel explains what was wrong. Each pin is saved separately by its direction, and saved positions live in their own file (`positions.json`, on the data volume, included in the backups and the restore script), so the weekly CDOT refresh never overwrites them. If CDOT ever renames a direction, a saved position for the old name stops applying (it stays in the history).
+
+**Behind the scenes.** `PUT /api/stations/:id/locations/<direction>/position` with `{ lat, lng, note }` saves, `DELETE` on the same address reverts (both need the write token), and `GET /api/stations/:id/positions` returns the history. A direction containing a slash, such as `NB/SB`, is URL-encoded (`NB%2FSB`).
 
 ## Inspection locations on the map
 
@@ -524,7 +544,7 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 
 **How often does the data refresh?** Station locations and inspection data refresh automatically every Monday at 06:17 UTC, and only changed data is committed and deployed. Run it now with `gh workflow run refresh-data.yml`.
 
-**Can I add a station or fix a phone number?** Not by hand: stations come from CDOT's layer and an edit to `data/stations.json` would be overwritten at the next refresh. There is no override mechanism yet; if CDOT's data is wrong or incomplete, that is a feature to add.
+**Can I fix a station's position?** Yes: if a port has moved, use **Move pin** on its card (see "Moving a station's pin"). Adding a station, or correcting a phone number or name, is not possible by hand: those come from CDOT's layer, and an edit to `data/stations.json` would be overwritten at the next refresh. There is no override for those yet.
 
 **Does it work on a phone?** Yes, and it installs as an app. Team members open `https://stations.snowseasonstech.net`, sign in with their email, and add it to the Home Screen; see [docs/install.md](docs/install.md). It is read-only for now. You can follow stations to be notified when they change (see Notifications).
 
@@ -733,7 +753,7 @@ Still open: what each tier includes beyond the seat count, whether there is a tr
 - **A real status source.** The biggest gap is that status is manual. Ask CSP's Port of Entry office and CDOT's COtrip team whether a feed or API exists (contact details from public listings, so verify them: CSP Port of Entry Branch, Golden office, 303-273-1870; COtrip, cdot_cotrip@state.co.us). If one exists it is a single adapter (see Contributing).
 - **Per-direction status.** Most ports have separate eastbound/westbound or northbound/southbound facilities that can open and close independently; today a port has one status.
 - **Email notifications.** Email when a station flips between open and closed, for people who don't use the app (phone notifications are covered under "Planned: mobile app").
-- **Station overrides.** A persisted way to correct a phone number or add a note that survives the weekly sync (today edits to `data/stations.json` are overwritten).
+- **More station overrides.** Moving a pin is done (see "Moving a station's pin"). The same persisted-override idea could correct a phone number, a name or highway details, or add a station CDOT doesn't list; today edits to `data/stations.json` are overwritten by the weekly refresh.
 - **Trends.** Out-of-service rates over time and comparisons between ports; a CSV export of the inspection data.
 - **Better map placement.** About 4% of inspections can't be placed because FMCSA gives only a place name; free-text highway-milepost entries could be matched to the stations' mileposts.
 - **A real datastore.** SQLite (or Postgres) if more than one instance or heavy concurrent writes are ever needed; today status is a JSON file read once at startup, which is why the app runs as a single instance.

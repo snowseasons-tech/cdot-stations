@@ -7,6 +7,8 @@ import { Store } from './store.js';
 import { importStatuses } from './importer.js';
 import { summarize } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
+import { Positions, validatePosition, agrees } from './positions.js';
+import { centroid } from './geo.js';
 import { FailureLimiter, RateLimiter, tokenMatches } from './auth.js';
 import { Subscriptions, LimitReached, createNotifier, createWebPushSender, loadPushConfig, validateRequest, isPushEndpoint } from './push.js';
 
@@ -41,6 +43,7 @@ const TYPES = {
 
 export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), locationsFile = join(ROOT, 'data/inspection-locations.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter(),
   subscriptionsFile = process.env.SUBSCRIPTIONS_FILE ?? join(ROOT, 'data/subscriptions.json'),
+  positionsFile = process.env.POSITIONS_FILE ?? join(ROOT, 'data/positions.json'),
   pushConfig = loadPushConfig(), pushSender, pushLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }) } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
@@ -53,8 +56,32 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
     : null;
   const store = new Store(statusFile, { onChange: (event) => notifier?.notify(event) }); // fire and forget: never delays a save
   await store.load();
+  const positions = new Positions(positionsFile);
+  await positions.load();
   const find = (id) => stations.find((s) => s.id === id);
-  const view = (s) => ({ ...s, ...store.get(s.id), inspections: summarize(inspections, s.id) });
+
+  // A pin that the team has moved is returned at its saved position, with CDOT's original and the reason alongside.
+  const withPositions = (s) => ({
+    ...s,
+    locations: s.locations.map((l) => {
+      const saved = positions.get(s.id, l.direction);
+      if (!saved) return l;
+      const original = { lat: l.lat, lng: l.lng };
+      return { ...l, lat: saved.lat, lng: saved.lng, original, correction: { note: saved.note, savedAt: saved.savedAt, source: saved.source, cdotAgrees: agrees(original, saved) } };
+    }),
+  });
+  const view = (s) => ({ ...withPositions(s), ...store.get(s.id), inspections: summarize(inspections, s.id) });
+
+  // The ports' circles on the inspection map sit at the average of a station's pins (worked out when the data was
+  // built), so they are moved to the average of the current pins, which includes any saved positions.
+  const stationById = new Map(stations.map((st) => [st.id, st]));
+  const withCurrentPorts = (data) => data && ({
+    ...data,
+    locations: data.locations.map((l) => {
+      const st = l.kind === 'port' ? stationById.get(l.station) : null;
+      return st ? { ...l, ...centroid(withPositions(st).locations) } : l;
+    }),
+  });
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -95,7 +122,26 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     try {
       const { pathname } = new URL(req.url, 'http://x');
-      const m = pathname.match(/^\/api\/stations(?:\/([a-z0-9-]+)(\/history|\/status|\/inspections)?)?$/);
+      const m = pathname.match(/^\/api\/stations(?:\/([a-z0-9-]+)(\/history|\/status|\/inspections|\/positions)?)?$/);
+      const pin = pathname.match(/^\/api\/stations\/([a-z0-9-]+)\/locations\/([^/]+)\/position$/);
+
+      // Saving, reverting and listing the positions of stations that have moved.
+      if (pin) {
+        const s = find(pin[1]);
+        let direction;
+        try { direction = decodeURIComponent(pin[2]); } catch { return json(res, 400, { error: 'bad direction' }); }
+        const location = s?.locations.find((l) => l.direction === direction);
+        if (!location) return json(res, 404, { error: 'station or direction not found' });
+        if (req.method !== 'PUT' && req.method !== 'DELETE') return json(res, 405, { error: 'method not allowed' });
+        if (!authorize(req, res)) return;
+        const original = { lat: location.lat, lng: location.lng };
+        if (req.method === 'PUT') {
+          await positions.set(s.id, direction, validatePosition(await readBody(req, 2_000), original), original);
+        } else if (!(await positions.revert(s.id, direction, original))) {
+          return json(res, 404, { error: 'this pin has not been moved' });
+        }
+        return json(res, 200, withPositions(s).locations.find((l) => l.direction === direction));
+      }
 
       if (m && req.method === 'GET' && !m[1]) return json(res, 200, { fetchedAt, stations: stations.map(view) });
       if (m?.[1]) {
@@ -103,6 +149,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         if (!s) return json(res, 404, { error: 'station not found' });
         if (req.method === 'GET' && !m[2]) return json(res, 200, view(s));
         if (req.method === 'GET' && m[2] === '/history') return json(res, 200, store.history(s.id));
+        if (req.method === 'GET' && m[2] === '/positions') return json(res, 200, positions.history(s.id));
         if (req.method === 'GET' && m[2] === '/inspections') {
           const months = Number(new URL(req.url, 'http://x').searchParams.get('months') ?? 12);
           if (!Number.isInteger(months) || months < 1 || months > 36) return json(res, 400, { error: 'months must be an integer from 1 to 36' });
@@ -147,7 +194,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         const period = q.get('period') ?? '12m';
         if (!levels) return json(res, 400, { error: 'levels must be a comma-separated list of 1-5' });
         if (!PERIODS.includes(period)) return json(res, 400, { error: `period must be one of ${PERIODS.join(', ')}` });
-        return json(res, 200, summarizeLocations(locations, { levels, period }));
+        return json(res, 200, summarizeLocations(withCurrentPorts(locations), { levels, period }));
       }
 
       if (pathname === '/api/import') {
@@ -183,6 +230,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
     }
   });
   server.push = { subscriptions, notifier }; // exposed for tests
+  server.positions = positions;
   return server;
 }
 

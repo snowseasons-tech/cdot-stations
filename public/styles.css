@@ -57,3 +57,12 @@ html.standalone .update-btn { display:none; }
 .follow-btn[aria-pressed="true"] { background:var(--open); border-color:var(--open); color:#fff; }
 .follow-btn:disabled { opacity:.6; cursor:default; }
 .card.flash { outline:3px solid var(--open); transition:outline-color 1.5s; }
+
+.pin.corrected { outline:2px dashed #2b6cb0; outline-offset:2px; }
+.pin.move-pin { background:#e67e22; }
+.mover { margin:12px 12px 0; padding:10px 12px; border:2px solid #e67e22; border-radius:8px; background:var(--card); font-size:.9rem; }
+.mover label { display:block; margin:8px 0; font-weight:600; font-size:.85rem; }
+.mover input, .mover select, .mover textarea { display:block; width:100%; margin-top:4px; font:inherit; padding:5px; background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:6px; }
+.mv-coords { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+#mv-info { margin:4px 0; }
+.mover .actions { flex-wrap:wrap; }

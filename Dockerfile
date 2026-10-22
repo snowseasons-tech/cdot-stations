@@ -4,7 +4,8 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
     STATUS_FILE=/var/lib/cdot/status.json \
-    SUBSCRIPTIONS_FILE=/var/lib/cdot/subscriptions.json
+    SUBSCRIPTIONS_FILE=/var/lib/cdot/subscriptions.json \
+    POSITIONS_FILE=/var/lib/cdot/positions.json
 
 WORKDIR /app
 # The one runtime dependency (web-push) is installed first, from the lockfile, so this layer is reused until
@@ -17,7 +18,7 @@ COPY public ./public
 COPY data/stations.json data/inspections.json data/inspection-locations.json ./data/
 COPY scripts ./scripts
 
-# Status, history and push subscriptions live on this volume; mount it to keep them across deploys.
+# Status, history, push subscriptions and saved station positions live on this volume; mount it to keep them across deploys.
 RUN mkdir -p /var/lib/cdot && chown node:node /var/lib/cdot
 VOLUME /var/lib/cdot
 

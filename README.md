@@ -157,6 +157,66 @@ Each failure has a different safety net:
 - **No user accounts or audit of who changed what**, only the source and time.
 - **HTTP on the LAN.** HTTPS and HSTS belong at the reverse proxy before the app is public.
 
+## Performance
+
+The app is small and fast enough that performance is not a concern at this scale. These are measurements, not guarantees: October 2026, Node 22, a 16-core home server, `ab` (ApacheBench) running on the same machine, against a temporary instance (not production). Treat them as orders of magnitude.
+
+**Reads** (5,000 requests, 50 concurrent, straight to the app):
+
+| Endpoint | Requests/s | p50 | p99 |
+|---|---|---|---|
+| `GET /` (the page) | 4,300 | 11 ms | 23 ms |
+| `GET /api/stations` | 3,600 | 14 ms | 17 ms |
+| `GET /api/stations/limon` | 7,000 | 7 ms | 8 ms |
+| `GET /api/stations/limon/inspections?months=36` | 6,200 | 8 ms | 11 ms |
+| `GET /api/inspection-locations` (all levels, all time) | 1,400 | 35 ms | 45 ms |
+
+Node is single-threaded, so at 50 concurrent requests most of that latency is queueing: at 10 concurrent, `/api/stations` is about 4 ms and the locations endpoint about 10 ms. Through nginx the numbers are the same within noise (production, 10 concurrent: 2,281 req/s with nginx vs 2,174 direct). The slowest endpoint does the most work, filtering and serializing 277 map points (106 KB).
+
+**Writes** go through the status queue, with one temp-file rename each:
+
+| Case | Writes/s | Latency |
+|---|---|---|
+| One at a time, empty history | ~1,700 | ~1 ms |
+| One at a time, history at its 1,000-entry cap (158 KB file rewritten each time) | ~860 | ~1 ms |
+| 50 concurrent, history full | ~1,000 | p50 48 ms, p99 54 ms, none failed |
+
+**Footprint.** Starts serving in about 200 ms. Process memory (RSS) was 73 MB idle, 97 MB after 10,000 heavy reads and 110 MB after 1,500 writes; this wasn't a long-running leak test. Docker reports far less for the container (about 16 MiB) because it doesn't count file-backed pages, so compare like with like. The image is 239 MB, mostly the Node base image.
+
+**What a visitor downloads** (bytes; "gzip" is the response gzipped by hand, for comparison):
+
+| Resource | Raw | Gzip |
+|---|---|---|
+| `/`, `app.js`, `styles.css` together | 17 KB | 6 KB |
+| `/api/stations` | 9.8 KB | 2.0 KB |
+| `/api/stations/:id/inspections` | 1.4 KB | 0.4 KB |
+| `/api/inspection-locations` (all levels, all time) | 106 KB | 15 KB |
+| Leaflet from unpkg (not from this server) | 148 KB JS + 15 KB CSS | n/a |
+
+**Load in practice.** Each open page polls `/api/stations` once a minute (about 10 KB), so 100 open tabs is under 2 requests per second against a capacity in the thousands. The page is never the bottleneck; the design limit is the single instance (see Architecture), not speed.
+
+**Delivery speed.** A push is live in about 70 to 95 seconds: tests about 10 s, image build, smoke test and publish about 40 to 60 s, deploy about 14 s (one run in six took 161 s).
+
+### Known inefficiencies (not fixed)
+
+In order of value:
+1. **nginx doesn't compress JSON, JS or CSS.** nginx's default `gzip_types` is HTML only, so the 106 KB locations response goes over the LAN uncompressed (about 15 KB gzipped). Adding `gzip_types application/json text/css text/javascript;` to `deploy/nginx-cdot-stations.conf` fixes it. It matters little on a LAN and a lot over the internet.
+2. **Static files have no `Cache-Control`, `ETag` or `Last-Modified`**, so every page load refetches the ~17 KB. Cheap to add if it ever matters.
+3. **Summaries are recomputed on every request** (about 1,000 rows filtered per station), although the data is read-only at runtime. A cache would be trivial and is unnecessary at this traffic.
+
+### Measuring it yourself
+
+```bash
+PORT=3105 STATUS_TOKEN=t STATUS_FILE=/tmp/perf-status.json node server.js &
+echo $! > /tmp/perf.pid
+ab -q -n 5000 -c 50 http://127.0.0.1:3105/api/stations
+echo '{"status":"open"}' > /tmp/body.json
+ab -q -n 1000 -c 1 -u /tmp/body.json -T application/json -H 'authorization: Bearer t' http://127.0.0.1:3105/api/stations/limon/status
+kill $(cat /tmp/perf.pid); rm /tmp/perf-status.json
+```
+
+Benchmark a temporary instance, not the production container, and stop it by PID: `pkill -f "node server.js"` also matches the container's process on the server.
+
 ## Data
 
 - **Locations** come from CDOT's public [POELocations](https://services.arcgis.com/yzB9WM8W0BO3Ql7d/ArcGIS/rest/services/POELocations/FeatureServer) layer (last published 2019). Platteville is flagged as planned.

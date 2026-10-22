@@ -62,6 +62,101 @@ A small Node app (no npm dependencies) serves a one-page map and a JSON API. Sta
 | `test/` | Unit and API tests (`npm test`) and a Docker-based backup test (`test/e2e/`) |
 | `.github/workflows/` | `deploy.yml` (test, publish, deploy) and `refresh-data.yml` |
 
+## Architecture
+
+[How it works](#how-it-works) is the overview. This section is the structure behind it: the parts, how they depend on each other, and why they are built this way.
+
+### Four parts
+
+| Part | What | Runs |
+|---|---|---|
+| **Runtime** | One Node process: HTTP server, status store, static page | In a container on the home server, behind nginx |
+| **Data pipeline** | Scripts that turn CDOT and FMCSA data into JSON files committed to git | Weekly on GitHub Actions, or by hand |
+| **Delivery pipeline** | Tests, image build, smoke test, publish, deploy, rollback | GitHub Actions, then a self-hosted runner on the server |
+| **Operations** | Backup, restore, alerting, heartbeat check | Cron on the server, plus a scheduled workflow in the backup repo |
+
+The parts only meet through files and git: the data pipeline writes `data/*.json`, the delivery pipeline bakes them into an image, and the runtime reads them at startup. Nothing at runtime calls CDOT, FMCSA or GitHub, so those being slow or down never affects the page.
+
+### Runtime
+
+**Modules** (an arrow means "imports"):
+
+```
+server.js ─► store.js          status.json: current status per station + capped history
+          ─► auth.js           constant-time token check, failed-attempt lockout
+          ─► importer.js ─► store.js     validates and applies imported records
+          ─► inspections.js            monthly rows ─► per-station summaries, OOS rates
+          ─► inspection-locations.js ─► inspections.js     map points filtered by level and period
+adapters/ (file, url)  ─ used only by scripts/import-status.js, never by the server
+scripts/               ─ standalone; none import server code
+```
+
+`createApp(options)` takes every file path (and the token and limiter) as options instead of reading globals, which is what lets the tests run the real server against temporary files.
+
+**A request**
+1. Security headers are set on every response, before any routing.
+2. The path is matched against the API routes; anything else is served from `public/` (paths are normalized and must stay inside it).
+3. A write goes through `authorize`: the client (connection address, or `X-Real-IP` when `TRUST_PROXY=1`) is checked against the lockout, then the token is compared in constant time; failures count toward the lockout.
+4. The body is read with a size cap (10 KB; 500 KB for imports), parsed and validated. Bad input is a `400`, an unknown station a `404`, a planned station a `409`, anything unexpected a `500`.
+5. Reads are answered from memory: station data merged with the current status and a 12-month inspection summary.
+
+**State.** Everything except status is read-only at runtime and loaded once at startup (about 150 KB in memory). Status is the only mutable data and has a single writer, this process. It is persisted after each change by writing a temp file and renaming it, with writes queued so only one runs at a time (a failed write doesn't block the ones behind it), and read from disk only at startup.
+
+| File | Shape |
+|---|---|
+| `data/stations.json` | `{ source, fetchedAt, stations: [{ id, name, highway, planned, phone, locations: [{ direction, milepost, lat, lng }] }] }` |
+| `data/inspections.json` | `{ source, fetchedAt, through, rows: [{ station, month, level, total, vehicleOos, driverOos }] }` |
+| `data/inspection-locations.json` | `{ source, fetchedAt, through, coverage, locations: [{ id, name, kind, lat, lng, levels }] }` |
+| `status.json` (volume) | `{ current: { <id>: { status, note, updatedAt, source } }, history: [ ... last 1000 ... ] }` |
+
+A station's `id` (a slug of its name) is the key everywhere: inspections and saved statuses refer to it, which is why the sync refuses to drop a station silently.
+
+### Data pipeline
+
+`scripts/sync-*.js` fetch the public sources, join them to station ids, and write the JSON files, which are committed. Committing generated data is deliberate: a deploy is reproducible, rolling back the image also rolls back the data, changes show up as reviewable diffs, and the runtime has no live dependency on the sources.
+
+- **Joining.** Inspections are matched to a port by town name and fixed-facility flag; map points are placed at a port or at a town centroid from a Census gazetteer (`data/co-places.json`, used only by the scripts and not shipped in the image).
+- **Guards.** `scripts/data-file.js` rewrites a file only if the data changed (the fetch time alone doesn't count); the scripts refuse empty results, dropped stations, or sharp drops in counts unless `FORCE=1`.
+- **Refresh.** `refresh-data.yml` runs the scripts and tests weekly. If data changed it commits as a bot and dispatches the deploy workflow explicitly, because a push made with the default token doesn't trigger other workflows.
+
+### Delivery
+
+```
+push to main ─► test (Node 22) ─► build image ─► boot it, smoke-test ─► publish to GHCR ─► deploy job
+                                                                                          │ self-hosted runner, same host
+                                           pull :sha-<commit> ─► replace container ─► wait healthy ─► done
+                                                                                          └─ unhealthy ─► restore previous image, fail the job
+```
+
+Runtime topology: `browser ─► nginx :8080 (LAN) ─► 127.0.0.1:3000 ─► container`, with the `cdot-data` volume mounted at `/var/lib/cdot` and the token in an env file outside the image. Images are tagged with the commit SHA and the deploy uses that tag, so what runs is exactly what was tested. The deploy job runs on a self-hosted runner because the server is on a home network that GitHub's hosted runners can't reach; this avoids SSH keys and open ports.
+
+### Operations
+
+Each failure has a different safety net:
+
+| Failure | Caught by |
+|---|---|
+| Bad code | Tests, then the image smoke test, before anything is published |
+| Image that boots but is broken | Health check after deploy, then automatic rollback |
+| Bad upstream data | Sync guards (the weekly job fails instead of committing) |
+| Lost or corrupted status | Daily local and off-site backup (validated before saving), restore script |
+| Backup fails | A `backup-failed` issue, closed on recovery |
+| Backup stops running (server off, cron dead) | A `backup-missing` issue from the daily heartbeat check |
+
+### Design decisions
+
+- **No dependencies, plain `node:http`.** Small surface to patch, nothing to install, tests need no tooling.
+- **JSON files, not a database.** Status is a few KB with one writer, so a file is simple to back up, diff and restore. The cost is below.
+- **Data baked into the image.** Predictable and fast; the cost is that fresher data means a (automatic) redeploy.
+- **Status has a source and a time.** Every update records where it came from (`manual` or an import name), so imports and people can coexist and stale imports can't overwrite newer entries.
+- **A shared write token.** Enough for a small trusted group; it is the part to replace first if this goes public.
+
+### Known limits
+
+- **One instance only.** Status is held in memory and read from disk at startup, so two instances would diverge. Scaling out means moving status to a real database.
+- **No user accounts or audit of who changed what**, only the source and time.
+- **HTTP on the LAN.** HTTPS and HSTS belong at the reverse proxy before the app is public.
+
 ## Data
 
 - **Locations** come from CDOT's public [POELocations](https://services.arcgis.com/yzB9WM8W0BO3Ql7d/ArcGIS/rest/services/POELocations/FeatureServer) layer (last published 2019). Platteville is flagged as planned.

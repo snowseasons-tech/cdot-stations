@@ -9,6 +9,7 @@ export class Store {
   constructor(file) {
     this.file = file;
     this.state = { current: {}, history: [] };
+    this.writes = Promise.resolve();
   }
 
   async load() {
@@ -34,9 +35,20 @@ export class Store {
     this.state.current[id] = entry;
     this.state.history.push({ id, ...entry });
     this.state.history = this.state.history.slice(-MAX_HISTORY);
-    const tmp = `${this.file}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.state, null, 2));
-    await rename(tmp, this.file);
+    await this.save();
     return entry;
+  }
+
+  // Disk writes run one at a time: they all use the same temp file, so overlapping writes would race on the
+  // rename. Memory is updated immediately; each write saves whatever the state is when its turn comes, and a
+  // failed write doesn't stop the ones queued behind it.
+  save() {
+    const write = this.writes.then(async () => {
+      const tmp = `${this.file}.tmp`;
+      await writeFile(tmp, JSON.stringify(this.state, null, 2));
+      await rename(tmp, this.file);
+    });
+    this.writes = write.catch(() => {});
+    return write;
   }
 }

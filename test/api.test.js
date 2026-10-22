@@ -73,3 +73,35 @@ test('refuses to listen on a public address without a token', async () => {
   const allowed = run({ HOST: '0.0.0.0', STATUS_TOKEN: 'x' });
   assert.notEqual(allowed.status, 1); // still running when the timeout killed it
 });
+
+test('simultaneous status updates all succeed and leave one consistent file', async (t) => {
+  const { Store } = await import('../store.js');
+  const dir = await mkdtemp(join(tmpdir(), 'cdot-'));
+  t.after(() => rm(dir, { recursive: true }));
+  const file = join(dir, 'status.json');
+  const store = new Store(file);
+
+  const results = await Promise.allSettled(
+    Array.from({ length: 100 }, (_, i) => store.set(`s${i % 10}`, { status: i % 2 ? 'open' : 'closed', note: `n${i}` })),
+  );
+  assert.deepEqual(results.filter((r) => r.status === 'rejected').map((r) => r.reason.code), []);
+
+  const onDisk = JSON.parse(await (await import('node:fs/promises')).readFile(file, 'utf8'));
+  assert.equal(onDisk.history.length, 100);
+  assert.equal(Object.keys(onDisk.current).length, 10);
+  assert.deepEqual((await (await import('node:fs/promises')).readdir(dir)).sort(), ['status.json']); // no stray .tmp
+});
+
+test('a failed disk write does not block later writes', async (t) => {
+  const { Store } = await import('../store.js');
+  const { mkdir } = await import('node:fs/promises');
+  const dir = await mkdtemp(join(tmpdir(), 'cdot-'));
+  t.after(() => rm(dir, { recursive: true }));
+  const store = new Store(join(dir, 'missing', 'status.json')); // parent directory doesn't exist yet
+
+  await assert.rejects(store.set('limon', { status: 'open' }), { code: 'ENOENT' });
+  await mkdir(join(dir, 'missing'));
+  await store.set('cortez', { status: 'closed' }); // the queue recovers
+  const onDisk = JSON.parse(await (await import('node:fs/promises')).readFile(join(dir, 'missing', 'status.json'), 'utf8'));
+  assert.equal(onDisk.current.cortez.status, 'closed');
+});

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs on the server (piped over SSH by the deploy workflow): pulls the image, replaces the container,
-# waits for it to report healthy, and restores the previous image if the new one doesn't.
-#   bash -s -- <image> <port-mapping>        e.g. ghcr.io/owner/cdot-stations:sha-abc1234 127.0.0.1:3000:3000
+# Runs on the server (by the self-hosted runner in the deploy workflow): pulls the image, replaces the
+# container, waits for it to report healthy, and restores the previous image if the new one doesn't.
+#   bash scripts/deploy.sh <image> <port-mapping>   e.g. ghcr.io/owner/cdot-stations:sha-abc1234 127.0.0.1:3000:3000
 # Expects the token env file at ~/cdot-stations/env (written by the workflow).
 set -euo pipefail
 

@@ -53,30 +53,26 @@ docker run -d --name cdot-stations --restart unless-stopped -p 3000:3000 \
 
 ### Deploy to your server
 
-On pushes to `main`, once the image is published, the `deploy` job SSHes to your server, pulls the exact commit's image (`sha-<commit>`), replaces the `cdot-stations` container, and waits for its health check. If the new container isn't healthy it restores the previous image and the job fails. The job is skipped until `DEPLOY_HOST` is set, and you can re-run it from the Actions tab.
+On pushes to `main`, once the image is published, the `deploy` job runs **on the server itself** through a self-hosted GitHub Actions runner (a home server isn't reachable from GitHub's hosted runners, and this needs no SSH keys or open ports). It pulls the exact commit's image (`sha-<commit>`), replaces the `cdot-stations` container, and waits for its health check. If the new container isn't healthy it restores the previous image and the job fails. Re-run it from the Actions tab if needed.
 
-Server needs Docker, and an SSH user that can run `docker` (e.g. in the `docker` group). The container publishes `127.0.0.1:3000` by default for a reverse proxy on the same machine to forward to.
-
-One-time setup (run these yourself; the secrets never pass through anyone else):
+One-time setup on the server:
 
 ```bash
-# 1. A dedicated deploy key; add the .pub to ~/.ssh/authorized_keys for the deploy user on the server
-ssh-keygen -t ed25519 -f deploy_key -N "" -C cdot-stations-deploy
+# 1. The runner's user must be able to run docker (log out and back in afterwards)
+sudo usermod -aG docker $USER
 
-# 2. Pin the server's host key. Compare the fingerprint with the server's before trusting it.
-ssh-keyscan -p 22 your.server.example > known_hosts && ssh-keygen -lf known_hosts
+# 2. Install and register the runner as a service (downloads GitHub's runner, verifies its checksum, uses sudo)
+bash scripts/setup-runner.sh
 
-# 3. Repository variables (not secret) and secrets
-gh variable set DEPLOY_HOST --body your.server.example
-gh variable set DEPLOY_USER --body deploy
-gh secret set DEPLOY_SSH_KEY < deploy_key
-gh secret set DEPLOY_KNOWN_HOSTS < known_hosts
-openssl rand -hex 32 | gh secret set STATUS_TOKEN   # the write token; read it back from the server's ~/cdot-stations/env
+# 3. Turn deploys on
+gh variable set DEPLOY_ENABLED --body true
 ```
 
-Optional variables: `DEPLOY_PORT` (SSH port, default 22) and `DEPLOY_PORT_MAPPING` (default `127.0.0.1:3000:3000`; use `0.0.0.0:3000:3000` if the proxy runs on another host). The job uses a GitHub environment named `production`; GitHub creates it on first run, and you can add required reviewers to it for manual approval.
+The `STATUS_TOKEN` secret (the write token) is set on the repo; the job writes it to `~/cdot-stations/env` (mode 600) on the server and passes it to the container with `--env-file`. GitHub secrets can't be read back, so keep your own copy.
 
-The token is written to `~/cdot-stations/env` (mode 600) on the server and passed to the container with `--env-file`, never on a command line.
+Optional variable `DEPLOY_PORT_MAPPING` (default `127.0.0.1:3000:3000`, for a reverse proxy on the same machine; use `0.0.0.0:3000:3000` if the proxy is on another host).
+
+Notes: the runner executes this repository's workflow code on the server, so keep the repo private and only let trusted people push to it. Only the `deploy` job uses the runner; tests and the image build stay on GitHub-hosted machines, and pull requests never deploy.
 
 ## Importing status
 

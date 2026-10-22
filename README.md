@@ -466,6 +466,8 @@ The deploy rewrites `~/cdot-stations/env` and restarts the container with the ne
 
 Tick **Show inspection locations on the map** (above the station list) to draw circles for where level I–V inspections happened, sized by count. Pick any combination of levels and either the last 12 months or all available data (about 3 years); click a circle for its level breakdown and out-of-service rates. Purple circles are ports of entry; blue circles are towns. The choices are remembered in the browser.
 
+**Why only levels I–V.** That is all FMCSA's public file reports for Colorado. Nationwide it has just 77 Level VI records (none in Colorado) and no Level VII or VIII at all, so a filter for them could never match anything. If FMCSA ever starts reporting them for Colorado, adding them is a small change (the sync query, the API's accepted levels, and the page's checkboxes all stop at 5).
+
 FMCSA's inspection records have **no coordinates**, only a place description, so each record is placed by `scripts/sync-inspection-locations.js`:
 
 - `LIMON POE WB` / `LAMAR PORT OF ENTRY` and fixed-facility inspections in a port's town go to that port's coordinates (about 67% of inspections);

@@ -43,6 +43,8 @@ On iPhone this works only in the app you added to the Home Screen (not in Safari
 | "Can't reach the server. Showing the last data." | You have no signal, or the server is down. Tap **Retry** when you have a connection. |
 | No code arrives | Check spam, and make sure you used the exact email your team lead added. Anyone not on the list is turned away. |
 | No **Add to Home Screen** on iPhone | Open the link in **Safari** (not inside another app, such as Mail or Messages). |
+| No **Follow** buttons on iPhone, and a note saying to install the app | You're in the browser (Safari or Chrome), where iPhone doesn't allow notifications at all. Install the app (Share, then **Add to Home Screen**) and then **open it from the new icon on your Home Screen**, not from the browser. You can tell you're in the app when there's no address bar or browser toolbar. |
+| "Notifications need iOS 16.4 or newer" | Update iOS in Settings, General, Software Update. |
 | "Notifications are blocked" | Turn them back on for the app in your phone's settings (on iPhone: Settings, then scroll to the app), then reopen it. |
 | Notifications stop arriving | Open the app, tap **Following** to unfollow and **Follow** again on the stations you want. |
 | The page looks old | Close the app fully and reopen it; it checks for updates each time. |

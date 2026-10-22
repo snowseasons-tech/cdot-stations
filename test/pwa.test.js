@@ -232,3 +232,9 @@ test('the page has the notifications panel and loads the follow script', async (
   assert.match(html, /id="notify-all"/);
   assert.match(html, /<script src="follow\.js"><\/script>/);
 });
+
+test('install.js loads before follow.js (follow.js uses its platform helpers to explain iPhone requirements)', async () => {
+  const html = (await read('index.html')).toString();
+  assert.ok(html.indexOf('src="install.js"') !== -1 && html.indexOf('src="install.js"') < html.indexOf('src="follow.js"'));
+  assert.match(html, /id="notify-toggle"/); // the toggle that is hidden when only the install hint is shown
+});

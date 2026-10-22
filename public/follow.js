@@ -26,7 +26,22 @@
 
   // ---- the feature ----
   const supported = window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-  if (!supported) return; // e.g. an iPhone browser tab (push needs the installed app) or the plain-HTTP LAN address
+  if (!supported) {
+    // An iPhone browser tab (push only works in the installed app) or an iPhone older than iOS 16.4: say so, instead
+    // of showing nothing, which looks broken. Other unsupported cases (such as the plain-HTTP LAN address) stay quiet.
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    const info = window.installHelpers?.detectPlatform(navigator.userAgent, { standalone, platform: navigator.platform, maxTouchPoints: navigator.maxTouchPoints });
+    if (info?.os === 'ios' && window.isSecureContext) {
+      getJson('/api/push/key').then(() => { // only mention notifications if the server has them switched on
+        $('notify-toggle').hidden = true;
+        $('notify-note').textContent = standalone
+          ? 'Notifications need iOS 16.4 or newer. Update iOS to turn them on.'
+          : 'To get notifications on iPhone, install the app: tap the Share button, choose Add to Home Screen, then open it from the icon on your Home Screen (not from the browser).';
+        $('notify').hidden = false;
+      }).catch(() => {});
+    }
+    return;
+  }
 
   let key = null;       // the server's public push key
   let following = [];   // station ids this device follows, or ['all']

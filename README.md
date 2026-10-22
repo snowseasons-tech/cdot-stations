@@ -444,7 +444,7 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 
 **Can I add a station or fix a phone number?** Not by hand: stations come from CDOT's layer and an edit to `data/stations.json` would be overwritten at the next refresh. There is no override mechanism yet; if CDOT's data is wrong or incomplete, that is a feature to add.
 
-**Does it work on a phone?** Yes, the layout adapts to narrow screens. For now it is only reachable on your home network, at `http://192.168.0.20:8080`.
+**Does it work on a phone?** Yes, the layout adapts to narrow screens. For now it is only reachable on your home network, at `http://192.168.0.20:8080`. A proper mobile app is planned (see the Roadmap).
 
 **Does it work offline?** The server needs no internet (it never calls CDOT, FMCSA or GitHub while running). The page does: Leaflet loads from unpkg and map tiles from OpenStreetMap.
 
@@ -549,6 +549,84 @@ There are four layers, from fast and local to slow and realistic.
 
 See [CHANGELOG.md](CHANGELOG.md). Add an entry under *Unreleased* when you change something users or operators would notice.
 
-## Ideas for later
+## Roadmap
 
-A real CSP/Drivewyze/PrePass adapter if a feed becomes available, per-direction status, and SQLite/Postgres if multiple writers are needed.
+Proposals, not commitments, in rough order of value and urgency. Each says where it came from so it can be re-judged. When one ships, move it to [CHANGELOG.md](CHANGELOG.md) and delete it here.
+
+### Soon: small and worth doing
+
+1. **Know when the site is down.** Nothing alerts if the app stops responding between deploys. The daily backup fails loudly when the container is unreachable, so an outage is noticed within a day, but not sooner. A cron probe of `/api/stations` that opens an issue (or an external uptime check) closes the gap.
+2. **Show status history on the page.** `GET /api/stations/:id/history` already returns the last 50 changes, but the UI doesn't display them.
+3. **A browser check in CI.** The tests don't run the page. A headless check of the built image (page loads, map and layer draw, no console or CSP errors) would have caught CSP regressions automatically instead of by hand.
+4. **Cache headers on static files** (`ETag` / `Cache-Control`), so repeat visits don't refetch the page's ~17 KB (see Performance).
+
+### Before it goes public
+
+From the Security checklist; these are required, not optional, before exposing the app to the internet.
+- HTTPS and HSTS (a Cloudflare Tunnel or Let's Encrypt) and removing the plain-HTTP port.
+- nginx `limit_req` and the real client address passed as `X-Real-IP`.
+- Per-person logins in place of the shared token, with a record of who changed what.
+- Branch protection with required checks (letting the data-refresh bot through).
+- Pinning GitHub Actions and the base image by digest, with automated update PRs.
+
+### Planned: mobile app
+
+A mobile app is wanted, for the team only, on **iPhone and Android**, hosted by the team itself. It needs to work **with a signal** (no offline mode), should **notify the team when a station changes**, and starts **read-only, with updating statuses from the phone wanted later**. The page already works in a phone browser (responsive layout), so this is about what a browser tab can't do: sitting on the home screen and notifying people.
+
+**What the decisions mean**
+- **Self-hosted, team only: no app stores.** Nothing is published to or reviewed by Apple or Google; people install it from a link.
+- **Both platforms: build it as an installable web app (PWA).** One codebase covers iPhone and Android. Native apps would mean two, and nothing here needs them.
+- **Online only: the offline work is minimal.** A small service worker makes it installable and caches the page shell; no data syncing or offline queue is needed.
+- **Read-only first: no logins needed yet.** The read API is open and carries no secrets, so no write token goes on anyone's phone. Per-person logins become a prerequisite only for updating statuses from the phone.
+- **Notifications don't need that either.** Statuses are updated from the web page or by importers, so phones can be notified of changes without being able to make them.
+- **A phone away from home still has to reach the server.** `192.168.0.20` only works on the home network, and push notifications only work over HTTPS. Because the audience is a known team, the server needn't be open to the whole internet: a Cloudflare Tunnel with Cloudflare Access (team members sign in by email) or a private network such as Tailscale gives HTTPS and reach from anywhere without exposing it publicly. That is cheaper and safer than the full "go public" list above, and it is the real prerequisite for everything else here. The "Before it goes public" items matter if it is opened to everyone instead.
+
+**Plan**
+1. **Reach the server from anywhere:** a Cloudflare Tunnel with Cloudflare Access (decided; details below), over HTTPS.
+2. **Installable web app, read-only.** A manifest and a minimal service worker on the existing page: installs to the home screen from a link and opens full-screen. This is a complete first version on its own.
+3. **Notifications (web push).** Decided: **a saved change to a station's status or note notifies its followers, and nothing else does** (a new inspection summary, a data refresh or a map update never does) (re-importing identical data changes nothing, so it doesn't). People **follow stations** from the app, one at a time or all of them. Needs, in order:
+   - *Change events on the server.* The status store already knows the previous entry when it saves a new one, so it emits an event for each station that changed. Narrowing this later (for example to open/closed flips only) is a small change.
+   - *Subscriptions.* Each phone registers a push subscription and the stations it follows. Keep them in their own file on the status volume (so restoring statuses doesn't wipe who is subscribed), include that file in the backup, and drop a subscription when the push service reports it gone. The subscribe endpoint is a new unauthenticated write, so it needs a rate limit and a cap on total subscriptions, or to sit behind the team sign-in from step 1.
+   - *Sending.* Web push needs VAPID keys (a new secret, stored like the token) and encrypted delivery. **Decided: the `web-push` package** (see below).
+   - *In the app:* a follow button per station, an "all stations" shortcut, and an unfollow.
+4. **Updating statuses from the phone.** Needs per-person logins and the status history on the page first, so changes are attributable. This is the "want to change that" step.
+5. **Native wrapper (Capacitor) or native apps** only if a PWA turns out not to be enough.
+
+**Known platform constraints.** On Android, Chrome supports install and push directly. On iPhone, web push works only for a web app **added to the Home Screen** on iOS 16.4 or newer, and the user must grant permission from a tap inside the installed app. So iPhone users need to be guided, and anyone on an older iPhone won't get notifications until they update.
+
+**Telling people about the iPhone install steps: decided to do it in three places**, so nobody has to remember anything:
+1. **In the app itself.** When the page is opened in a browser tab on an iPhone (not yet installed), show a dismissible card at the top: "Install this app to get notifications", with the steps below and a picture of the Share button. When it is opened from the Home Screen the card disappears, and the follow button asks for notification permission (that tap is what iOS requires). On an iPhone older than iOS 16.4, say so plainly ("update iOS to get notifications"); on Android show the browser's own install prompt.
+2. **A one-page guide** in the repo (`docs/install.md`, with screenshots) that the team lead can link to.
+3. **A message to send the team** when it launches, with the link and the same steps. A draft:
+
+> Our station tracker is now an app. On your iPhone: open **<link>** in **Safari**, tap the **Share** button, choose **Add to Home Screen**, tap **Add**. Then open it from the new icon on your Home Screen (not from Safari), open a station, tap **Follow**, and allow notifications. Android: open the link in Chrome and tap **Install**. You need iOS 16.4 or newer for notifications on iPhone.
+
+**Decided: reach the server through a Cloudflare Tunnel protected by Cloudflare Access.** The tunnel makes an outbound connection from the server to Cloudflare, so no router ports are opened and the home IP stays hidden; Cloudflare provides the HTTPS certificate; and Access puts a sign-in in front of the whole site, so only listed team members (by email) can reach it. Nothing to install on phones, and people sign in again only now and then. (Tailscale was the alternative; it needs its app running on every phone.)
+
+**What it needs from you:** a hostname on a domain that is on Cloudflare, and a Cloudflare account (the free plan covers a small team on Access). **No domain needs to be bought:** `snowseasonstech.store` and `snowseasonstech.net` already use Cloudflare's nameservers (per a public DNS lookup), so a subdomain of either, such as `stations.snowseasonstech.net`, costs nothing and takes minutes to add. Things to keep in mind when choosing:
+- **Pick the hostname.** It appears in the install link and the team message. Use a subdomain, not the bare domain, so the store is untouched.
+- **Zone-wide Cloudflare settings apply to the whole domain**, including the store. In particular, don't switch on HSTS with "include subdomains" without thinking it through. An Access policy, by contrast, applies only to the hostname it is created for.
+- **Choosing the team's email addresses** and how long a sign-in lasts are your decisions in Cloudflare's dashboard (Zero Trust, then Access). I can prepare the server-side config and docs, but the account, the DNS record and the Access policy are yours to set up, since they involve your credentials.
+- **If you'd rather keep this separate from the store,** buy a cheap domain instead (Cloudflare Registrar sells at cost); that is a purchase for you to make.
+
+**What it changes in this app**
+- **Where it points:** `cloudflared` on the server forwards the public hostname to nginx (`http://localhost:8080`), which already forwards to the app. HSTS can then be set at Cloudflare.
+- **Real client address:** requests arrive from Cloudflare, so nginx should pass the visitor's address from the `CF-Connecting-IP` header as `X-Real-IP` (only for requests that came from the tunnel), or the lockout and any rate limit treat everyone as one client.
+- **Sessions expire:** when an Access sign-in lapses, the page's API calls get a sign-in page instead of JSON. The app must detect that (a non-JSON response) and send the person to sign in again instead of showing a broken page. The service worker must not cache those responses.
+- **Keep the LAN route:** the home-network address keeps working, and the importer and backup scripts keep using it, so they don't need to pass through Access.
+- **Write protection stays.** Access decides who can *open* the site; the write token (later, per-person logins) still decides who can *change* a status.
+
+### Later: features
+
+- **A real status source.** The biggest gap is that status is manual. Ask CSP's Port of Entry office and CDOT's COtrip team whether a feed or API exists (contact details from public listings, so verify them: CSP Port of Entry Branch, Golden office, 303-273-1870; COtrip, cdot_cotrip@state.co.us). If one exists it is a single adapter (see Contributing).
+- **Per-direction status.** Most ports have separate eastbound/westbound or northbound/southbound facilities that can open and close independently; today a port has one status.
+- **Email notifications.** Email when a station flips between open and closed, for people who don't use the app (phone notifications are covered under "Planned: mobile app").
+- **Station overrides.** A persisted way to correct a phone number or add a note that survives the weekly sync (today edits to `data/stations.json` are overwritten).
+- **Trends.** Out-of-service rates over time and comparisons between ports; a CSV export of the inspection data.
+- **Better map placement.** About 4% of inspections can't be placed because FMCSA gives only a place name; free-text highway-milepost entries could be matched to the stations' mileposts.
+- **A real datastore.** SQLite (or Postgres) if more than one instance or heavy concurrent writes are ever needed; today status is a JSON file read once at startup, which is why the app runs as a single instance.
+
+### Not planned
+
+Wait-time estimates and PrePass/Drivewyze bypass data (no public feed was found; those services show status inside their own apps), and public user accounts.
+

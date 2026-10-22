@@ -28,6 +28,15 @@
       <menu><button value="cancel">Cancel</button><button id="f-save" value="save">Save</button></menu>
     </form>
   </dialog>
+  <dialog id="insp">
+    <h2 id="insp-title"></h2>
+    <label>Period
+      <select id="insp-months"><option value="12">Last 12 months</option><option value="24">Last 24 months</option><option value="36">Last 36 months</option></select>
+    </label>
+    <div id="insp-body"></div>
+    <p class="sub">North American Standard inspections at the fixed port, from FMCSA's public Vehicle Inspection File. Roadside patrol stops in the same town are excluded. Vehicle OOS rate is the share of vehicle inspections (Levels I, II, V) with a vehicle out-of-service violation; driver OOS rate likewise over driver inspections (Levels I, II, III).</p>
+    <menu><button id="insp-close">Close</button></menu>
+  </dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="app.js"></script>
 </body>

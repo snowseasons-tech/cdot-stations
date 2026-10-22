@@ -26,3 +26,9 @@ dialog menu { display:flex; justify-content:flex-end; gap:8px; padding:0; }
 @media (max-width:760px) { main { grid-template-columns:1fr; grid-template-rows:45vh 1fr; height:auto; } #map { order:-1; height:45vh; } #list { overflow:visible; } }
 a { color: var(--muted); }
 [hidden] { display: none !important; }
+#insp table { width:100%; border-collapse:collapse; font-size:.85rem; }
+#insp td { padding:2px 4px; border-bottom:1px solid var(--line); }
+#insp td.num { text-align:right; font-variant-numeric:tabular-nums; }
+#insp h3 { margin:12px 0 4px; font-size:.9rem; }
+.bars { display:flex; align-items:flex-end; gap:2px; height:80px; border-bottom:1px solid var(--line); }
+.bar { flex:1; background:var(--open); min-height:1px; }

@@ -20,17 +20,17 @@ export class Store {
   }
 
   get(id) {
-    return this.state.current[id] ?? { status: 'unknown', note: '', updatedAt: null };
+    return this.state.current[id] ?? { status: 'unknown', note: '', updatedAt: null, source: null };
   }
 
   history(id) {
     return this.state.history.filter((h) => h.id === id).slice(-50).reverse();
   }
 
-  async set(id, { status, note = '' }) {
+  async set(id, { status, note = '', source = 'manual', updatedAt = new Date().toISOString() }) {
     if (!STATUSES.includes(status)) throw new RangeError(`status must be one of ${STATUSES.join(', ')}`);
     if (typeof note !== 'string' || note.length > MAX_NOTE) throw new RangeError(`note must be a string up to ${MAX_NOTE} characters`);
-    const entry = { status, note: note.trim(), updatedAt: new Date().toISOString() };
+    const entry = { status, note: note.trim(), updatedAt, source };
     this.state.current[id] = entry;
     this.state.history.push({ id, ...entry });
     this.state.history = this.state.history.slice(-MAX_HISTORY);

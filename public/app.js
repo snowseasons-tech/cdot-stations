@@ -1,5 +1,7 @@
 const COLORS = { open: '#1a7f43', closed: '#c0392b', unknown: '#7a8594', planned: '#b07d00' };
 const $ = (id) => document.getElementById(id);
+const pct = (r) => (r == null ? '–' : `${(r * 100).toFixed(1)}%`);
+const fmt = (n) => n.toLocaleString();
 const stateOf = (s) => (s.planned ? 'planned' : s.status);
 
 const map = L.map('map').setView([39.0, -105.55], 7);
@@ -35,12 +37,21 @@ function render() {
     );
     if (s.phone) card.append(el('div', { className: 'meta' }, el('a', { href: `tel:${s.phone}`, textContent: s.phone })));
     if (s.note) card.append(el('p', { className: 'note', textContent: s.note }));
-    card.append(el('div', { className: 'when', textContent: s.planned ? 'Planned — not open yet' : ago(s.updatedAt) }));
+    const i = s.inspections;
+    if (i?.total) card.append(el('div', { className: 'meta', textContent: `${fmt(i.total)} inspections (12 mo) · vehicle OOS ${pct(i.vehicleOosRate)} · driver OOS ${pct(i.driverOosRate)}` }));
+    card.append(el('div', { className: 'when', textContent: s.planned ? 'Planned — not open yet' : ago(s.updatedAt) + (s.source && s.source !== 'manual' ? ` · via ${s.source}` : '') }));
+    const actions = el('div', { className: 'actions' });
     if (!s.planned) {
       const btn = el('button', { textContent: 'Update status' });
       btn.addEventListener('click', (e) => { e.stopPropagation(); openEditor(s); });
-      card.append(el('div', { className: 'actions' }, btn));
+      actions.append(btn);
     }
+    if (i?.total) {
+      const btn = el('button', { textContent: 'Inspections' });
+      btn.addEventListener('click', (e) => { e.stopPropagation(); openInspections(s); });
+      actions.append(btn);
+    }
+    if (actions.children.length) card.append(actions);
     const focus = () => map.flyTo([s.locations[0].lat, s.locations[0].lng], 11);
     card.addEventListener('click', focus);
     card.addEventListener('keydown', (e) => e.key === 'Enter' && e.target === card && focus());
@@ -95,6 +106,34 @@ $('f-save').addEventListener('click', async (e) => {
   $('editor').close();
   await load();
 });
+
+let inspecting = null;
+
+async function showInspections() {
+  const res = await fetch(`/api/stations/${inspecting.id}/inspections?months=${$('insp-months').value}`);
+  const d = await res.json();
+  const max = Math.max(1, ...d.months.map((m) => m.count));
+  const body = $('insp-body');
+  body.replaceChildren(
+    el('p', {}, el('strong', { textContent: fmt(d.total) }), ` inspections · vehicle OOS ${pct(d.vehicleOosRate)} · driver OOS ${pct(d.driverOosRate)}`),
+    el('h3', { textContent: 'By inspection level' }),
+    el('table', {}, ...d.byLevel.map((l) => el('tr', {}, el('td', { textContent: `Level ${l.level}` }), el('td', { textContent: l.name }), el('td', { className: 'num', textContent: fmt(l.count) })))),
+    el('h3', { textContent: 'By month' }),
+    el('div', { className: 'bars', role: 'img', ariaLabel: 'Inspections per month' },
+      ...d.months.map((m) => el('div', { className: 'bar', title: `${m.month.slice(0, 4)}-${m.month.slice(4)}: ${m.count}`, style: `height:${(m.count / max) * 100}%` }))),
+    el('div', { className: 'meta', textContent: `${d.months[0].month.slice(0, 4)}-${d.months[0].month.slice(4)} to ${d.through.slice(0, 4)}-${d.through.slice(4)} (latest month may be partial)` }),
+  );
+}
+
+function openInspections(s) {
+  inspecting = s;
+  $('insp-title').textContent = `${s.name} inspections`;
+  $('insp-months').value = '12';
+  showInspections();
+  $('insp').showModal();
+}
+$('insp-months').addEventListener('change', showInspections);
+$('insp-close').addEventListener('click', () => $('insp').close());
 
 load();
 setInterval(load, 60_000);

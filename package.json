@@ -8,6 +8,8 @@
   "scripts": {
     "start": "node server.js",
     "sync": "node scripts/sync-stations.js",
+    "sync:inspections": "node scripts/sync-inspections.js",
+    "import": "node scripts/import-status.js",
     "test": "node --test \"test/*.test.js\""
   }
 }

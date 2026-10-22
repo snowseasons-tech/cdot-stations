@@ -6,57 +6,53 @@ import { join } from 'node:path';
 import { createApp } from '../server.js';
 import { groupStations } from '../scripts/sync-stations.js';
 
-async function start(opts = {}) {
+async function start(t, opts = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'cdot-'));
   const server = await createApp({ statusFile: join(dir, 'status.json'), ...opts });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { base, stop: async () => { server.close(); await rm(dir, { recursive: true }); } };
+  t.after(async () => { server.closeAllConnections(); server.close(); await rm(dir, { recursive: true }); });
+  return { base };
 }
 const put = (base, id, body, headers = {}) =>
   fetch(`${base}/api/stations/${id}/status`, { method: 'PUT', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
-test('lists stations, defaulting to unknown', async () => {
-  const { base, stop } = await start();
+test('lists stations, defaulting to unknown', async (t) => {
+  const { base } = await start(t);
   const { stations } = await (await fetch(`${base}/api/stations`)).json();
   assert.equal(stations.length, 10);
   assert.ok(stations.every((s) => s.status === 'unknown'));
-  await stop();
 });
 
-test('status update persists and appears in history', async () => {
-  const { base, stop } = await start();
+test('status update persists and appears in history', async (t) => {
+  const { base } = await start(t);
   const r = await put(base, 'limon', { status: 'closed', note: 'Scale down' });
   assert.equal(r.status, 200);
   const s = await (await fetch(`${base}/api/stations/limon`)).json();
   assert.equal(s.status, 'closed');
   const h = await (await fetch(`${base}/api/stations/limon/history`)).json();
   assert.equal(h.length, 1);
-  await stop();
 });
 
-test('rejects bad input, unknown and planned stations', async () => {
-  const { base, stop } = await start();
+test('rejects bad input, unknown and planned stations', async (t) => {
+  const { base } = await start(t);
   assert.equal((await put(base, 'limon', { status: 'maybe' })).status, 400);
   assert.equal((await put(base, 'limon', { status: 'open', note: 'x'.repeat(281) })).status, 400);
   assert.equal((await put(base, 'nowhere', { status: 'open' })).status, 404);
   assert.equal((await put(base, 'platteville', { status: 'open' })).status, 409);
-  await stop();
 });
 
-test('token is enforced when configured', async () => {
-  const { base, stop } = await start({ token: 'secret' });
+test('token is enforced when configured', async (t) => {
+  const { base } = await start(t, { token: 'secret' });
   assert.equal((await put(base, 'limon', { status: 'open' })).status, 401);
   assert.equal((await put(base, 'limon', { status: 'open' }, { authorization: 'Bearer secret' })).status, 200);
-  await stop();
 });
 
-test('does not serve files outside public/', async () => {
-  const { base, stop } = await start();
+test('does not serve files outside public/', async (t) => {
+  const { base } = await start(t);
   const r = await fetch(`${base}/..%2fserver.js`);
   assert.ok([403, 404].includes(r.status));
   assert.equal((await fetch(`${base}/`)).status, 200);
-  await stop();
 });
 
 test('groupStations merges directions and flags planned sites', () => {

@@ -337,13 +337,52 @@ To change the schedule, edit the `cron` line. Bot commits go straight to `main`;
 
 ## Security
 
-- **Token check** is constant-time. After 10 failed attempts within a minute a client gets `429` (with `Retry-After`) and its token isn't checked again until the window passes.
-- **Client identity** for that lockout is the connection address, or the proxy's `X-Real-IP` when `TRUST_PROXY=1`. The deploy script sets it only when the container is published on `127.0.0.1`, where only the local reverse proxy can reach it. Don't set it if the app is directly reachable, or callers can spoof the header. Behind a tunnel such as Cloudflare, have the proxy pass the real visitor address (e.g. `CF-Connecting-IP`) as `X-Real-IP`, otherwise every visitor shares one lockout.
-- **Headers:** every response has a Content-Security-Policy (scripts and styles only from this origin and unpkg, map tiles only from OpenStreetMap, no framing), `nosniff`, a referrer policy, and a permissions policy; API responses are `no-store`.
-- **Third-party assets:** Leaflet loads from unpkg pinned to an exact version with Subresource Integrity hashes, so a tampered CDN file won't run. When bumping Leaflet, update the version and both hashes in `public/index.html`; `npm test` fails if a hash or version pin is missing.
-- **Not handled in the app:** HTTPS and HSTS (add `Strict-Transport-Security` at the proxy once it serves HTTPS) and request rate limiting for non-failed traffic (use nginx `limit_req`).
+**Threat model.** A small internal tool. Station data comes from public sources, so reading is open; what needs protecting is the integrity of the status data (nobody but the team should be able to change it) and the people using the page. It is served over plain HTTP on a home network today, and is built so it can be exposed publicly later: see "Before making it public".
 
-### Inspection locations on the map
+### What protects what
+
+| Asset | Controls |
+|---|---|
+| **Status data** (who can change it) | Writes (`PUT .../status`, `POST /api/import`) need a bearer token, compared in constant time. After 10 failed attempts in a minute a client gets `429` and its token isn't checked again until the window passes. The server refuses to listen on a non-local address without a token. Input is validated (status must be open/closed/unknown, notes up to 280 characters, body size capped at 10 KB, 500 KB for imports), and for manual updates the server sets the source and time itself, so a caller can't forge them (an import may supply its own timestamp, but never one in the future, and it can't overwrite a newer status). |
+| **People using the page** (XSS and injection) | Notes and station names are put on the page as text, never as HTML. A Content-Security-Policy allows scripts only from this origin and unpkg (no inline scripts), connections only to this origin, and no framing; plus `nosniff`, a referrer policy and a permissions policy. API responses are `no-store`. Reads use no cookies, so there is no CSRF exposure: the token is sent in a header by the page's own code. |
+| **Files on the server** | Static files are served only from `public/` (paths are normalized and must stay inside it). |
+| **Third-party code** | Leaflet loads from unpkg at an exact version with Subresource Integrity hashes, so a tampered file won't run (`npm test` enforces the pin and hashes). The app itself has no npm dependencies to compromise. |
+| **Secrets** | The token lives in a GitHub secret, in `~/cdot-stations/env` on the server (mode 600), and is given to the container through `--env-file`, never on a command line or in the image. There are no SSH keys or cloud credentials: deploys use a runner on the server and the workflow's own short-lived token, and the registry login is removed after each deploy. |
+| **The container** | Runs as a non-root user, is published only on `127.0.0.1` (only the local nginx can reach it), and is health-checked. |
+| **Backups** | Go to a private GitHub repository. They contain only statuses and notes, nothing credential-like, but anything typed into a note is in them. |
+
+**Untrusted input.** CDOT, FMCSA and the Census gazetteer are treated as untrusted: the weekly refresh refuses implausible data (empty, dropped stations, sharp drops), and anything from them is displayed as text. One gap remains: the map's hover tooltip (`bindTooltip` in `public/app.js`) passes a string that Leaflet renders as HTML. The names come from the gazetteer and port names (none currently contain markup) and the CSP blocks inline script, so it isn't exploitable today, but it should be changed to a text node.
+
+### Client identity and the lockout
+
+The lockout identifies a client by connection address, or by the proxy's `X-Real-IP` when `TRUST_PROXY=1`. The deploy script sets it only when the container is published on `127.0.0.1`, where only the local reverse proxy can reach it. Don't set it if the app is directly reachable, or callers can spoof the header. Behind a tunnel such as Cloudflare, have the proxy pass the real visitor address (for example `CF-Connecting-IP`) as `X-Real-IP`, otherwise every visitor shares one lockout.
+
+### Trust assumptions to know about
+
+- **One shared token, no accounts.** Anyone holding it can change any status; there is no record of who did. It is stored in the browser's `localStorage` once entered, so an XSS bug would expose it (the CSP is the main defence).
+- **The self-hosted runner executes this repository's workflow code on the server.** Anyone who can push to `main` or edit a workflow can run commands there. Keep the repository private and its write access small. Only the deploy job uses the runner, and pull requests never deploy.
+- **Docker access is root-equivalent.** Users in the `docker` group (including the runner's user) can read the token from the container's environment.
+- **GitHub Actions are pinned to major versions** (`@v4`), not commit SHAs, and the base image is `node:22-alpine` without a digest. That trades supply-chain strictness for automatic security updates.
+- **The host runs other services.** Check `ss -ltn` on the server: anything listening on all interfaces must not be reachable from the internet.
+
+### Before making it public
+
+1. **HTTPS and HSTS** at the reverse proxy (a Cloudflare Tunnel or Let's Encrypt), and drop the plain-HTTP port. The token must never cross the network unencrypted.
+2. **Expose only the proxy**: forward or tunnel one port, not the machine. Confirm with `ss -ltn` what else listens on all interfaces.
+3. **Rate limit at nginx** (`limit_req`) for all traffic, not just failed tokens, and pass the real client address as `X-Real-IP`.
+4. **Replace the shared token** with per-person logins if more than a few people will write, and rotate it before launch.
+5. **Close the tooltip gap** above, and consider pinning Actions and the base image by digest with automated update PRs.
+6. **Protect `main`** with required checks (letting the data-refresh bot through) so a stray push can't deploy.
+
+### Rotating the token, or responding to a leak
+
+```bash
+openssl rand -hex 32 | gh secret set STATUS_TOKEN    # then re-run the deploy workflow
+```
+
+The deploy rewrites `~/cdot-stations/env` and restarts the container with the new value; update anything that calls the API (importers). Old tokens stop working immediately. Rotate whenever someone who knew it leaves, or if it may have been exposed.
+
+## Inspection locations on the map
 
 Tick **Show inspection locations on the map** (above the station list) to draw circles for where level I–V inspections happened, sized by count. Pick any combination of levels and either the last 12 months or all available data (about 3 years); click a circle for its level breakdown and out-of-service rates. Purple circles are ports of entry; blue circles are towns. The choices are remembered in the browser.
 

@@ -296,6 +296,51 @@ bash scripts/install-nginx-site.sh   # sudo: copies the site into sites-availabl
 
 The site also gzips JSON, JavaScript and CSS. It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open **http://192.168.0.20:8080** (the server's wired address; the Wi-Fi address `192.168.0.91` works too). Both come from DHCP and can change, so a reservation in your router keeps them stable. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`).
 
+### Public access through Cloudflare (runbook)
+
+Gives the team a public `https://` address behind a sign-in, for the mobile app (see the Roadmap). The tunnel makes an outbound connection from this server to Cloudflare, so no router ports are opened. **The order matters:** if the tunnel route exists before the Access application, the site is open to the whole internet until you add one.
+
+You need a hostname on a domain that is on Cloudflare, for example `stations.snowseasonstech.net` (use your own). "Dashboard" steps are yours to do in Cloudflare; menu names are as of writing and Cloudflare moves them occasionally.
+
+1. **Server: update nginx** (adds the visitor's real address so the failed-token lockout is per visitor, not one shared client). Needs `sudo`:
+   ```bash
+   bash scripts/install-nginx-site.sh
+   ```
+2. **Dashboard: create the Access application first.** Zero Trust, then Access controls, then Applications, then *Create new application*, then *Self-hosted and private*. Add the public hostname, add an **Allow** policy listing your team's email addresses, and set the session duration (longer means fewer sign-ins on phones; a week is a reasonable start). Access is deny-by-default, so anyone not on the list is turned away.
+3. **Dashboard: create the tunnel.** Networking, then Tunnels, then *Create a tunnel*; name it (for example `beelink1-stations`), choose Debian/Ubuntu, and **run the install command it shows on this server.** It contains the tunnel's token, which is a secret: don't paste it anywhere else. Wait for the status to show *Healthy*. (This server can already reach Cloudflare's tunnel service on port 7844.)
+4. **Dashboard: add the route.** In the tunnel, *Routes*, then *Add route*, then *Published application*: your subdomain and domain, **Service URL `http://127.0.0.1:8080`** (the nginx site). This also creates the DNS record.
+5. **Server: prove it is protected.** From any machine, not signed in:
+   ```bash
+   bash scripts/check-public-access.sh https://stations.snowseasonstech.net
+   ```
+   It must print `PASS` (visitors are sent to the Access sign-in). `FAIL ... open to the internet` means the app answered without a sign-in: stop the tunnel (`sudo systemctl stop cloudflared`) and fix the Access application before continuing. Exit code 2 means it couldn't tell (DNS not ready yet, or the application doesn't match this exact hostname).
+6. **Try it as a person.** On a phone off Wi-Fi, open the address and sign in with a listed email; the page and map should load. Try an address that is *not* on the list: it should be refused.
+
+**Set up for this project:** the hostname is `stations.snowseasonstech.net`, in the Zero Trust team that already existed in the Cloudflare account (the sign-in page shows that team's name, and team-wide settings such as login methods are shared with its other applications; each application's Allow policy is separate). Verified: every path and every write request is redirected to the sign-in when not signed in, and a listed email can sign in on a phone and use the app.
+
+**What stays the same.** The home-network address (`http://192.168.0.20:8080`) keeps working and doesn't go through Access, so the importer, the backup scripts and the deploy don't change. Writing a status still needs the write token: Access decides who can open the site, not who can change it.
+
+**Turning it off.** `sudo systemctl stop cloudflared` (or delete the route in the dashboard) makes the public address unreachable immediately; the Access application keeps blocking it, and the LAN is unaffected.
+
+**Worth knowing**
+- The tunnel token is a credential like `STATUS_TOKEN`. To rotate it, delete the tunnel in the dashboard and create a new one.
+- Anyone on the home network reaches nginx directly and skips Access; that is intended. If you ever want the app itself to insist on a valid Access login, Cloudflare can attach a signed token to each request that the origin verifies (the tunnel's *Protect with Access* setting); not built here.
+- When an Access sign-in expires, the page's data requests get a sign-in page instead of JSON. The page will need to handle that (planned with the installable app); until then a stale tab may show an error and need a reload.
+- `scripts/check-public-access.sh` is safe to run any time, for example after changing the Access policy.
+
+### Installable app
+
+The page is an installable web app (a PWA), so the team can add it to a phone's Home Screen. Pieces, all in `public/`:
+
+- `manifest.webmanifest` and `icons/` (generated by `bash scripts/build-icons.sh`, needs ImageMagick) give it a name, icon and full-screen display. The manifest link uses `crossorigin="use-credentials"` so the sign-in cookie is sent: behind Cloudflare Access the manifest is protected too, and without it phones would get no name or icon.
+- `sw.js`, the service worker, is **network-first**: the app needs a connection, and the cache is only a fallback for a dropped connection. It never touches `/api/`, writes or other sites' files, and never caches a redirect, so the Cloudflare sign-in page can't end up cached as the app.
+- `install.js` registers the worker and shows an install card: Share, then Add to Home Screen steps on iPhone (which has no install prompt), and Chrome's own prompt on Android and desktop.
+- **Read-only:** in the installed app the Update status buttons are hidden (`html.standalone .update-btn`). Updates are made from the web page. The API still accepts writes with the token, so this is a convenience and not a security boundary.
+- **Expired sign-in:** data requests use `redirect: 'manual'`, so an Access redirect shows as "Your sign-in has expired. [Sign in again]" instead of a broken page.
+- The CSP allows `manifest-src` and `worker-src` for this origin only. The service worker file is served with `Cache-Control: no-cache` so updates reach installed apps promptly.
+
+Service workers need HTTPS (or `localhost`), so over the plain-HTTP LAN address the page works but doesn't install.
+
 ## Backups
 
 Station status and history live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
@@ -444,7 +489,7 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 
 **Can I add a station or fix a phone number?** Not by hand: stations come from CDOT's layer and an edit to `data/stations.json` would be overwritten at the next refresh. There is no override mechanism yet; if CDOT's data is wrong or incomplete, that is a feature to add.
 
-**Does it work on a phone?** Yes, the layout adapts to narrow screens. For now it is only reachable on your home network, at `http://192.168.0.20:8080`. A proper mobile app is planned (see the Roadmap).
+**Does it work on a phone?** Yes, and it installs as an app. Team members open `https://stations.snowseasonstech.net`, sign in with their email, and add it to the Home Screen; see [docs/install.md](docs/install.md). It is read-only for now, and notifications are planned (see the Roadmap).
 
 **Does it work offline?** The server needs no internet (it never calls CDOT, FMCSA or GitHub while running). The page does: Leaflet loads from unpkg and map tiles from OpenStreetMap.
 
@@ -507,7 +552,7 @@ There are four layers, from fast and local to slow and realistic.
 
 | Layer | Run it | What it covers |
 |---|---|---|
-| Unit and API tests (43) | `npm test` | Starts the real server on a random port with temp files and calls it over HTTP, plus pure-function tests. No network, no Docker; takes a few seconds. |
+| Unit and API tests | `npm test` | Starts the real server on a random port with temp files and calls it over HTTP, plus pure-function tests. No network, no Docker; takes a few seconds. |
 | Backup end-to-end | `bash test/e2e/backup.sh` | Backup, retention pruning, refusal of corrupt data, restore and the heartbeat, against a throwaway container and a local git repo. Needs Docker, `jq` and `git`; leaves the real deployment untouched. |
 | Image smoke test | `docker build -t cdot-local . && bash scripts/smoke-test-image.sh cdot-local` | Boots the built image and checks it becomes healthy, serves the page and API (including inspection data) and enforces the write token. CI runs it before publishing. |
 | Post-deploy health check | automatic | The deploy script waits for the container's health check and rolls back if it fails. |
@@ -582,8 +627,8 @@ A mobile app is wanted, for the team only, on **iPhone and Android**, hosted by 
 - **A phone away from home still has to reach the server.** `192.168.0.20` only works on the home network, and push notifications only work over HTTPS. Because the audience is a known team, the server needn't be open to the whole internet: a Cloudflare Tunnel with Cloudflare Access (team members sign in by email) or a private network such as Tailscale gives HTTPS and reach from anywhere without exposing it publicly. That is cheaper and safer than the full "go public" list above, and it is the real prerequisite for everything else here. The "Before it goes public" items matter if it is opened to everyone instead.
 
 **Plan**
-1. **Reach the server from anywhere:** a Cloudflare Tunnel with Cloudflare Access (decided; details below), over HTTPS.
-2. **Installable web app, read-only.** A manifest and a minimal service worker on the existing page: installs to the home screen from a link and opens full-screen. This is a complete first version on its own.
+1. **Reach the server from anywhere: done.** A Cloudflare Tunnel with Cloudflare Access at `https://stations.snowseasonstech.net` (set up and verified 2026-10-21; see "Public access through Cloudflare" for how it works and how to turn it off).
+2. **Installable web app, read-only: done.** A manifest and a minimal service worker on the existing page: it installs to the home screen from a link and opens full-screen. See "Installable app" below and [docs/install.md](docs/install.md), the guide for the team.
 3. **Notifications (web push).** Decided: **a saved change to a station's status or note notifies its followers, and nothing else does** (a new inspection summary, a data refresh or a map update never does) (re-importing identical data changes nothing, so it doesn't). People **follow stations** from the app, one at a time or all of them. Needs, in order:
    - *Change events on the server.* The status store already knows the previous entry when it saves a new one, so it emits an event for each station that changed. Narrowing this later (for example to open/closed flips only) is a small change.
    - *Subscriptions.* Each phone registers a push subscription and the stations it follows. Keep them in their own file on the status volume (so restoring statuses doesn't wipe who is subscribed), include that file in the backup, and drop a subscription when the push service reports it gone. The subscribe endpoint is a new unauthenticated write, so it needs a rate limit and a cap on total subscriptions, or to sit behind the team sign-in from step 1.

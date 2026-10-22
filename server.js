@@ -20,6 +20,8 @@ const SECURITY_HEADERS = {
     "style-src-attr 'unsafe-inline'", // Leaflet and the map pins set inline style attributes
     "img-src 'self' data: https://tile.openstreetmap.org https://unpkg.com",
     "connect-src 'self'",
+    "manifest-src 'self'",
+    "worker-src 'self'", // the service worker (public/sw.js)
     "base-uri 'none'",
     "form-action 'self'",
     "frame-ancestors 'none'",
@@ -30,7 +32,10 @@ const SECURITY_HEADERS = {
   'cross-origin-opener-policy': 'same-origin',
 };
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+const TYPES = {
+  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json', '.png': 'image/png',
+};
 
 export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), locationsFile = join(ROOT, 'data/inspection-locations.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter() } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
@@ -128,7 +133,9 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       if (!file.startsWith(PUBLIC + '/')) return json(res, 403, { error: 'forbidden' });
       const body = await readFile(file).catch(() => null);
       if (!body) return json(res, 404, { error: 'not found' });
-      res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
+      // The service worker script must always be re-checked so an update reaches installed apps promptly.
+      const extra = rel === '/sw.js' ? { 'cache-control': 'no-cache' } : {};
+      res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', ...extra });
       res.end(body);
     } catch (e) {
       json(res, e instanceof RangeError || e instanceof SyntaxError ? 400 : 500, { error: e.message });

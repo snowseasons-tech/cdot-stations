@@ -26,6 +26,9 @@ check() { # description expected-status curl-args...
 }
 B=http://127.0.0.1:$PORT
 check "home page" 200 "$B/"
+check "web app manifest" 200 "$B/manifest.webmanifest"
+check "service worker" 200 "$B/sw.js"
+check "app icon" 200 "$B/icons/icon-192.png"
 check "station list" 200 "$B/api/stations"
 check "inspection data is baked in" 200 "$B/api/stations/limon/inspections"
 check "inspection locations are baked in" 200 "$B/api/inspection-locations?levels=1,2"

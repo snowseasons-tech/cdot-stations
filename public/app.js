@@ -4,6 +4,25 @@ const pct = (r) => (r == null ? '–' : `${(r * 100).toFixed(1)}%`);
 const fmt = (n) => n.toLocaleString();
 const stateOf = (s) => (s.planned ? 'planned' : s.status);
 
+// Behind Cloudflare Access, an expired sign-in makes the server answer with a redirect to the sign-in page. A
+// redirect: 'manual' request reports that as an "opaqueredirect" instead of failing with a confusing network error.
+class SessionExpired extends Error {}
+
+async function getJson(url) {
+  const res = await fetch(url, { redirect: 'manual' });
+  if (res.type === 'opaqueredirect') throw new SessionExpired();
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+function showNotice(error) {
+  const expired = error instanceof SessionExpired;
+  $('notice-text').textContent = expired ? 'Your sign-in has expired.' : "Can't reach the server. Showing the last data.";
+  $('notice-action').textContent = expired ? 'Sign in again' : 'Retry';
+  $('notice-action').onclick = () => (expired ? location.reload() : load());
+  $('notice').hidden = false;
+}
+
 const map = L.map('map').setView([39.0, -105.55], 7);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
 const markers = new Map();
@@ -42,7 +61,7 @@ function render() {
     card.append(el('div', { className: 'when', textContent: s.planned ? 'Planned — not open yet' : ago(s.updatedAt) + (s.source && s.source !== 'manual' ? ` · via ${s.source}` : '') }));
     const actions = el('div', { className: 'actions' });
     if (!s.planned) {
-      const btn = el('button', { textContent: 'Update status' });
+      const btn = el('button', { className: 'update-btn', textContent: 'Update status' });
       btn.addEventListener('click', (e) => { e.stopPropagation(); openEditor(s); });
       actions.append(btn);
     }
@@ -71,9 +90,13 @@ function render() {
 }
 
 async function load() {
-  const res = await fetch('/api/stations');
-  stations = (await res.json()).stations;
-  render();
+  try {
+    stations = (await getJson('/api/stations')).stations;
+    render();
+    $('notice').hidden = true;
+  } catch (error) {
+    showNotice(error);
+  }
 }
 
 function openEditor(s) {
@@ -92,13 +115,15 @@ $('f-save').addEventListener('click', async (e) => {
   const token = $('f-token').value;
   const res = await fetch(`/api/stations/${editing.id}/status`, {
     method: 'PUT',
+    redirect: 'manual',
     headers: { 'content-type': 'application/json', ...(token && { authorization: `Bearer ${token}` }) },
     body: JSON.stringify({ status: $('f-status').value, note: $('f-note').value }),
   });
+  if (res.type === 'opaqueredirect') { $('f-error').textContent = 'Your sign-in has expired. Reload the page to sign in again.'; return; }
   if (res.status === 401) {
     localStorage.setItem('needsToken', '1');
     $('token-row').hidden = false;
-    $('f-error').textContent = 'Access token required.';
+    $('f-error').textContent = 'Write token required.';
     return;
   }
   if (!res.ok) { $('f-error').textContent = (await res.json()).error; return; }
@@ -136,10 +161,15 @@ async function loadLocations() {
   if (!prefs.show) { locLayer.remove(); $('loc-summary').textContent = ''; return; }
   if (!prefs.levels.length) { $('loc-summary').textContent = 'Pick at least one inspection level.'; return; }
   locLayer.addTo(map);
-  const res = await fetch(`/api/inspection-locations?levels=${prefs.levels.join(',')}&period=${prefs.period}`);
-  if (mine !== locRequest) return;
-  if (!res.ok) { $('loc-summary').textContent = 'Could not load inspection locations.'; return; }
-  const d = await res.json();
+  let d;
+  try {
+    d = await getJson(`/api/inspection-locations?levels=${prefs.levels.join(',')}&period=${prefs.period}`);
+  } catch (error) {
+    if (mine !== locRequest) return;
+    $('loc-summary').textContent = 'Could not load inspection locations.';
+    if (error instanceof SessionExpired) showNotice(error);
+    return;
+  }
   if (mine !== locRequest) return;
   locLayer.clearLayers();
   for (const l of d.locations) { // largest first, so small locations draw on top of big ones
@@ -170,8 +200,13 @@ loadLocations();
 let inspecting = null;
 
 async function showInspections() {
-  const res = await fetch(`/api/stations/${inspecting.id}/inspections?months=${$('insp-months').value}`);
-  const d = await res.json();
+  let d;
+  try {
+    d = await getJson(`/api/stations/${inspecting.id}/inspections?months=${$('insp-months').value}`);
+  } catch (error) {
+    $('insp-body').replaceChildren(el('p', { className: 'error', textContent: error instanceof SessionExpired ? 'Your sign-in has expired. Reload the page to sign in again.' : 'Could not load inspections.' }));
+    return;
+  }
   const max = Math.max(1, ...d.months.map((m) => m.count));
   const body = $('insp-body');
   body.replaceChildren(

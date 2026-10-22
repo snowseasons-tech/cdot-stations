@@ -27,6 +27,8 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - nginx site (`deploy/nginx-cdot-stations.conf`) forwarding LAN port 8080 to the app.
 - Weekly data refresh workflow: re-fetches CDOT and FMCSA data (including the inspection locations) and, only when it changed, commits it and triggers a deploy. The sync scripts refuse empty results, dropped stations, or more than 20% fewer inspections.
 - Daily backup of the status data to a local folder (30-day retention) and to a private GitHub repository, with a restore script.
+- Installable web app for iPhone and Android, read-only: add it to the Home Screen from `https://stations.snowseasonstech.net` ([docs/install.md](docs/install.md)). Includes a web app manifest and icons, a network-first service worker that never caches the API or sign-in redirects, an install card with iPhone steps, and a clear "Your sign-in has expired" message instead of a broken page. In the installed app the Update status buttons are hidden.
+- Public access for the team through a Cloudflare Tunnel with Cloudflare Access (email sign-in) at `https://stations.snowseasonstech.net`, with no router ports opened. Includes a runbook in the README and `scripts/check-public-access.sh`, which proves an unauthenticated visitor is sent to the sign-in instead of being served the app.
 - Alerts for backups through GitHub issues: one when a backup fails, and one when no backup has arrived for over 30 hours (server off, cron stopped).
 
 ### Security
@@ -37,6 +39,8 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - The map's hover tooltip no longer renders place names as HTML (a name containing markup used to create real elements); a test now prevents strings being passed to Leaflet popups and tooltips.
 
 ### Changed
+- The token field on the status editor is now labelled "Write token", to avoid confusion with Cloudflare Access.
+- The nginx site now passes the visitor's real address to the app when requests arrive through a Cloudflare Tunnel (ignored for LAN requests, so it can't be spoofed). Applies when `scripts/install-nginx-site.sh` is re-run.
 - The nginx site compresses JSON, JavaScript and CSS responses (the map data goes from 106 KB to about 16 KB). Applies when `scripts/install-nginx-site.sh` is re-run on the server.
 
 ### Fixed

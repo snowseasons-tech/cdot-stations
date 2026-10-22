@@ -82,7 +82,7 @@ The container only listens on `127.0.0.1:3000`. `deploy/nginx-cdot-stations.conf
 bash scripts/install-nginx-site.sh   # sudo: copies the site into sites-available, enables it, runs nginx -t, reloads
 ```
 
-It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open `http://<server LAN IP>:8080`. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`), and consider a DHCP reservation in your router so the server's address doesn't change.
+It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open **http://192.168.0.20:8080** (the server's wired address; the Wi-Fi address `192.168.0.91` works too). Both come from DHCP and can change, so a reservation in your router keeps them stable. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`).
 
 ## Security
 

@@ -146,7 +146,7 @@ async function loadLocations() {
     L.circleMarker([l.lat, l.lng], {
       radius: Math.min(26, 4 + Math.sqrt(l.total) * 0.55),
       color: LOC_COLORS[l.kind], weight: 1, fillColor: LOC_COLORS[l.kind], fillOpacity: 0.4,
-    }).bindPopup(locPopup(l)).bindTooltip(`${l.name}: ${fmt(l.total)}`).addTo(locLayer);
+    }).bindPopup(locPopup(l)).bindTooltip(el('span', { textContent: `${l.name}: ${fmt(l.total)}` })).addTo(locLayer);
   }
   const total = d.locations.reduce((n, l) => n + l.total, 0);
   $('loc-summary').textContent = d.locations.length

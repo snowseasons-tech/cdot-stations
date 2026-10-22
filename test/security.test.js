@@ -79,3 +79,11 @@ test('third-party scripts and styles are pinned with integrity hashes', async ()
     assert.match(tag, /@\d+\.\d+\.\d+/, `${tag} must pin an exact version`);
   }
 });
+
+test('the page never hands Leaflet a string to render as HTML', async () => {
+  const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  // Leaflet sets string tooltip/popup content with innerHTML; data (place names, notes) must go in as DOM nodes.
+  const stringContent = js.match(/\.bind(?:Tooltip|Popup)\(\s*[`'"]/g);
+  assert.equal(stringContent, null, `string passed to bindTooltip/bindPopup: ${stringContent}`);
+  assert.equal(/\.innerHTML\s*=|insertAdjacentHTML|outerHTML\s*=|document\.write/.test(js), false);
+});

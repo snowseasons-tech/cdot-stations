@@ -34,6 +34,7 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - Content-Security-Policy and other security headers on every response; API responses are not cacheable.
 - Leaflet is loaded from a CDN with a pinned version and Subresource Integrity hashes.
 - Manual status updates accept only a status and a note; the source and timestamp are always set by the server.
+- The map's hover tooltip no longer renders place names as HTML (a name containing markup used to create real elements); a test now prevents strings being passed to Leaflet popups and tooltips.
 
 ### Changed
 - The nginx site compresses JSON, JavaScript and CSS responses (the map data goes from 106 KB to about 16 KB). Applies when `scripts/install-nginx-site.sh` is re-run on the server.

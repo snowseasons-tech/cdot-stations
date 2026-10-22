@@ -351,7 +351,7 @@ To change the schedule, edit the `cron` line. Bot commits go straight to `main`;
 | **The container** | Runs as a non-root user, is published only on `127.0.0.1` (only the local nginx can reach it), and is health-checked. |
 | **Backups** | Go to a private GitHub repository. They contain only statuses and notes, nothing credential-like, but anything typed into a note is in them. |
 
-**Untrusted input.** CDOT, FMCSA and the Census gazetteer are treated as untrusted: the weekly refresh refuses implausible data (empty, dropped stations, sharp drops), and anything from them is displayed as text. One gap remains: the map's hover tooltip (`bindTooltip` in `public/app.js`) passes a string that Leaflet renders as HTML. The names come from the gazetteer and port names (none currently contain markup) and the CSP blocks inline script, so it isn't exploitable today, but it should be changed to a text node.
+**Untrusted input.** CDOT, FMCSA and the Census gazetteer are treated as untrusted: the weekly refresh refuses implausible data (empty, dropped stations, sharp drops), and anything from them, or typed by a user, is displayed as text. The page never gives Leaflet a string for a popup or tooltip (Leaflet would render it as HTML), only DOM nodes, and a test fails if that changes. This was once not the case for the map's hover tooltip; with a place name containing `<img ...>` it created a real element, and it was fixed by passing a text node.
 
 ### Client identity and the lockout
 
@@ -371,7 +371,7 @@ The lockout identifies a client by connection address, or by the proxy's `X-Real
 2. **Expose only the proxy**: forward or tunnel one port, not the machine. Confirm with `ss -ltn` what else listens on all interfaces.
 3. **Rate limit at nginx** (`limit_req`) for all traffic, not just failed tokens, and pass the real client address as `X-Real-IP`.
 4. **Replace the shared token** with per-person logins if more than a few people will write, and rotate it before launch.
-5. **Close the tooltip gap** above, and consider pinning Actions and the base image by digest with automated update PRs.
+5. **Consider pinning Actions and the base image by digest**, with automated update PRs.
 6. **Protect `main`** with required checks (letting the data-refresh bot through) so a stray push can't deploy.
 
 ### Rotating the token, or responding to a leak

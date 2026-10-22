@@ -55,7 +55,6 @@ function render() {
       el('h3', {}, s.name, el('span', { className: `badge ${st}`, textContent: st })),
       el('div', { className: 'meta', textContent: `${s.highway} · MP ${[...new Set(s.locations.map((l) => l.milepost))].join(' / ')} · ${s.locations.map((l) => l.direction).join(', ')}` }),
     );
-    if (s.locations.some((l) => l.correction)) card.append(el('div', { className: 'meta', textContent: 'Pin position corrected by the team (see map)' }));
     const conditions = el('a', { href: window.conditionsLinks.cotripMapUrl(s.locations[0]), target: '_blank', rel: 'noopener noreferrer', textContent: 'Live road conditions nearby ↗' });
     conditions.addEventListener('click', (e) => e.stopPropagation()); // don't also fly the map to the station
     card.append(el('div', { className: 'meta' }, conditions));
@@ -86,22 +85,11 @@ function render() {
     const ms = s.locations.map((l) => {
       const popup = el('div', {}, el('strong', { textContent: s.name }), ` (${l.direction})`, el('br'), `${s.highway} MP ${l.milepost}`, el('br'), stateOf(s) + (s.note ? ` — ${s.note}` : ''));
       popup.append(el('div', { className: 'meta' }, el('a', { href: window.conditionsLinks.cotripMapUrl(l), target: '_blank', rel: 'noopener noreferrer', textContent: 'Live road conditions nearby ↗' })));
-      if (l.correction) {
-        popup.append(el('div', { className: 'meta', textContent: `Pin moved by the team on ${new Date(l.correction.savedAt).toLocaleDateString()}${l.correction.note ? `: ${l.correction.note}` : ''}. CDOT lists ${l.original.lat.toFixed(5)}, ${l.original.lng.toFixed(5)}${l.correction.cdotAgrees ? ' (now matches)' : ''}.` }));
-      }
       return L.marker([l.lat, l.lng], {
         title: `${s.name} ${l.direction}`,
-        icon: L.divIcon({ className: '', html: `<div class="pin${l.correction ? ' corrected' : ''}" style="background:${COLORS[stateOf(s)]}"></div>`, iconSize: [18, 18] }),
+        icon: L.divIcon({ className: '', html: `<div class="pin" style="background:${COLORS[stateOf(s)]}"></div>`, iconSize: [18, 18] }),
       }).addTo(map).bindPopup(popup);
     });
-    // For a pin the team has moved, show where CDOT lists it too, with a dashed line to the new position.
-    for (const l of s.locations.filter((x) => x.correction)) {
-      ms.push(
-        L.polyline([[l.original.lat, l.original.lng], [l.lat, l.lng]], { color: '#7a8594', weight: 1, dashArray: '4 4' }).addTo(map),
-        L.circleMarker([l.original.lat, l.original.lng], { radius: 5, color: '#7a8594', weight: 1, dashArray: '2 3', fillOpacity: 0.15 })
-          .bindTooltip(el('span', { textContent: `CDOT's listed position for ${s.name} ${l.direction}` })).addTo(map),
-      );
-    }
     markers.set(s.id, ms);
   }
 }
@@ -125,7 +113,6 @@ async function load() {
     stations = (await getJson('/api/stations')).stations;
     render();
     window.followUi?.decorate();
-    window.moveUi?.decorate();
     openStationFromLink();
     $('notice').hidden = true;
   } catch (error) {

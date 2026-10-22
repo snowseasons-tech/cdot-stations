@@ -70,30 +70,4 @@ expect "$(printf '["limon"] []')" "$(printf '%s %s' "$(following phone-a)" "$(fo
 expect 1 "$(ls $T/base/backups | grep -c 'pre-restore-subscriptions')"
 expect closed "$(curl -s localhost:3998/api/stations/cortez | jq -r .status)" # statuses untouched by a subscriptions restore
 
-
-# ---- moved pins (positions.json)
-move() { curl -s -o /dev/null -X PUT -H 'content-type: application/json' -H 'authorization: Bearer t' -d "{\"lat\":$2,\"lng\":$3,\"note\":\"e2e\"}" "http://127.0.0.1:3998/api/stations/limon/locations/$1/position"; }
-pos_files() { find $T/base/backups -name 'positions-*.json' | wc -l | tr -d ' '; }
-remote_pins() { git -C $T/remote.git show main:positions.json 2>/dev/null | jq '.positions | length' || echo 0; }
-limon_wb_lat() { curl -s localhost:3998/api/stations/limon | jq -r '.locations[] | select(.direction=="WB") | .lat'; }
-
-echo "14) a moved pin is backed up locally and off-site"
-expect 0 "$(pos_files)"
-orig=$(limon_wb_lat); sleep 1; move WB 39.2752 -103.6900; bash scripts/backup-status.sh
-expect "1 1" "$(pos_files) $(remote_pins)"
-expect 39.2752 "$(limon_wb_lat)"
-
-echo "15) nothing changed: no new positions copy"
-sleep 1; bash scripts/backup-status.sh; expect 1 "$(pos_files)"
-
-echo "16) a corrupted positions file is refused"
-docker exec cdot-backup-test sh -c 'echo "{broken" > /var/lib/cdot/positions.json'
-if bash scripts/backup-status.sh 2>&1; then echo "FAIL: corrupted positions were backed up"; exit 1; fi; expect 1 "$(pos_files)"
-
-echo "17) restoring a positions backup brings the pin back (kind detected from the file)"
-bash scripts/restore-status.sh "$(find $T/base/backups -name 'positions-*.json' | sort | head -1)" --yes | grep -E "Restoring|healthy"
-expect 39.2752 "$(limon_wb_lat)"
-expect 1 "$(ls $T/base/backups | grep -c 'pre-restore-positions')"
-expect closed "$(curl -s localhost:3998/api/stations/cortez | jq -r .status)" # statuses untouched
-
 echo "backup e2e: all checks passed"

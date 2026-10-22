@@ -422,6 +422,47 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 - `PUT /api/stations/:id/status` with `{"status":"open|closed|unknown","note":"..."}`
 - `POST /api/import` with `{"source":"csp","records":[{"station":"limon","status":"open"}]}` (max 500 records) returns `{updated, unchanged, skipped}`
 
+## FAQ
+
+**Is the open/closed status live?** No. Neither CSP nor CDOT publishes a status feed (checked CSP's Port of Entry page and COtrip), so a station shows `unknown` until someone reports it, and it is only as current as the last update or import. The card shows when it was updated and by whom or what.
+
+**Can I rely on it for trip or compliance decisions?** No. This is an unofficial tool, not affiliated with CDOT, CSP or FMCSA. Status is whatever the team entered, and the inspection figures come from public FMCSA files that lag. To check a port, call its number (shown on each card) or CSP.
+
+**Why only 10 stations, and why is Platteville "planned" but has inspections?** The list is CDOT's public ports-of-entry layer. Platteville is listed there as a future site, but FMCSA has a few hundred inspections at "PLATTEVILLE CO" in fixed-facility records (sporadic, likely temporary operations), so they show.
+
+**What are the out-of-service (OOS) rates?** The share of inspections that found at least one out-of-service violation. The vehicle rate counts only inspections that covered the vehicle (Levels I, II, V, VI) and the driver rate only those that covered the driver (I, II, III, VI), matching how FMCSA reports them, so the two rates have different denominators.
+
+**Why doesn't the total on a station card match the map layer?** A card counts inspections *at that port* (fixed-facility records, last 12 months). The map layer counts all Colorado inspections it could place, including roadside patrol stops in towns, so its total is larger.
+
+**The latest month looks low. Is something wrong?** No: FMCSA data arrives late, so the newest month is partial. It fills in over the following weeks.
+
+**Why aren't some inspections on the map?** FMCSA records carry no coordinates, only a place name. About 4% are small places or free-text entries that can't be placed reliably, and the page shows the placed share. See "Inspection locations on the map".
+
+**Who can update a status, and what if I lost the token?** Anyone with the token, from "Update status" on a card, the API, or the importer. The server's copy is in `~/cdot-stations/env`; GitHub secrets can't be read back, so otherwise rotate it (see Security).
+
+**How often does the data refresh?** Station locations and inspection data refresh automatically every Monday at 06:17 UTC, and only changed data is committed and deployed. Run it now with `gh workflow run refresh-data.yml`.
+
+**Can I add a station or fix a phone number?** Not by hand: stations come from CDOT's layer and an edit to `data/stations.json` would be overwritten at the next refresh. There is no override mechanism yet; if CDOT's data is wrong or incomplete, that is a feature to add.
+
+**Does it work on a phone?** Yes, the layout adapts to narrow screens. For now it is only reachable on your home network, at `http://192.168.0.20:8080`.
+
+**Does it work offline?** The server needs no internet (it never calls CDOT, FMCSA or GitHub while running). The page does: Leaflet loads from unpkg and map tiles from OpenStreetMap.
+
+**What happens after a power cut or reboot?** Docker, nginx, cron and the deploy runner all start at boot, and the container restarts itself, so it comes back without help. Statuses are on a volume and survive. A backup due while the machine is off is missed; if it stays off, the heartbeat check raises an issue after about 30 hours.
+
+**How do I reset or wipe the statuses?** Restore an empty file. It saves the current data first, so it can be undone:
+```bash
+echo '{"current":{},"history":[]}' > /tmp/empty.json && bash scripts/restore-status.sh /tmp/empty.json
+```
+
+**How do I get the data out?** The read API is open: `curl http://192.168.0.20:8080/api/stations` (stations, status and 12-month inspection summaries), `/api/stations/limon/inspections?months=36`, `/api/stations/limon/history`, and `/api/inspection-locations?levels=1,2,3&period=all`. All JSON.
+
+**Can it pull status from CSP, Drivewyze or PrePass?** There is no official feed to pull from. If you find one, it is one small adapter (see Contributing). The app doesn't track wait times or bypass programs; use a note on the status.
+
+**What time zone are times in?** Stored in UTC. The page shows relative times ("12 min ago") and your browser's local date for older updates.
+
+**How do I run it on my own computer?** `git clone`, then `npm start` and open `http://127.0.0.1:3000`. Node 20 or newer, nothing to install.
+
 ## Troubleshooting
 
 Commands that mention `docker` need a user in the `docker` group. In a session started before you were added, prefix them with `sg docker -c "..."`.

@@ -40,21 +40,30 @@ export function parseSearch(params) {
   if (from && !isDate(from)) throw new SearchError('from must be a date like 2026-01-31');
   if (to && !isDate(to)) throw new SearchError('to must be a date like 2026-01-31');
   if (from && to && to < from) throw new SearchError('to must not be before from');
+  // Levels I-V as "1,3" (any order). Nothing, or all five, means no level filter.
+  const lv = params.get('levels') ?? '';
+  let levels = '';
+  if (lv) {
+    if (!/^[1-5](,[1-5]){0,4}$/.test(lv)) throw new SearchError('levels must be a comma-separated list of 1-5');
+    const set = [...new Set(lv.split(','))].sort();
+    levels = set.length === 5 ? '' : set.join(',');
+  }
   const raw = params.get('offset') ?? '0';
   if (!/^\d{1,4}$/.test(raw)) throw new SearchError(`offset must be a whole number from 0 to ${MAX_OFFSET}`);
   const offset = Number(raw);
   if (offset > MAX_OFFSET || offset % PAGE_SIZE !== 0) throw new SearchError(`offset must be a multiple of ${PAGE_SIZE} up to ${MAX_OFFSET}`);
   if (!q && !from && !to) throw new SearchError('enter a place or carrier, or a date range');
-  return { q, from, to, offset };
+  return { q, from, to, levels, offset };
 }
 
 const quote = (s) => `'${s.replaceAll("'", "''")}'`;
 
-export function buildUrl({ q, from, to, offset }, limit = PAGE_SIZE + 1) {
+export function buildUrl({ q, from, to, levels = '', offset }, limit = PAGE_SIZE + 1) {
   const where = ["report_state='CO'", "insp_facility='F'"];
   if (q) where.push(`(upper(location_desc) like ${quote(`%${q}%`)} OR upper(insp_carrier_name) like ${quote(`%${q}%`)})`);
   if (from) where.push(`insp_date >= ${quote(from.replaceAll('-', ''))}`);
   if (to) where.push(`insp_date <= ${quote(to.replaceAll('-', ''))}`);
+  if (levels) where.push(`insp_level_id in(${levels.split(',').map((l) => quote(l)).join(',')})`);
   const url = new URL(ENDPOINT);
   url.searchParams.set('$select', COLUMNS.join(','));
   url.searchParams.set('$where', where.join(' AND '));
@@ -95,7 +104,7 @@ export function shape(row) {
 export function createSearcher({ fetchImpl = fetch, now = Date.now } = {}) {
   const cache = new Map();
   return async (search) => {
-    const key = `${search.q}|${search.from}|${search.to}|${search.offset}`;
+    const key = `${search.q}|${search.from}|${search.to}|${search.levels}|${search.offset}`;
     const hit = cache.get(key);
     if (hit && hit.expires > now()) {
       cache.delete(key);

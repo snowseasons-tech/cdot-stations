@@ -17,8 +17,8 @@ const row = (n, extra = {}) => ({
 
 test('parseSearch normalises a good search', () => {
   assert.deepEqual(parseSearch(params({ q: '  fort   collins ', from: '2026-01-01', to: '2026-01-31', offset: '50' })),
-    { q: 'FORT COLLINS', from: '2026-01-01', to: '2026-01-31', offset: 50 });
-  assert.deepEqual(parseSearch(params({ from: '2026-01-01' })), { q: '', from: '2026-01-01', to: '', offset: 0 });
+    { q: 'FORT COLLINS', from: '2026-01-01', to: '2026-01-31', levels: '', offset: 50 });
+  assert.deepEqual(parseSearch(params({ from: '2026-01-01' })), { q: '', from: '2026-01-01', to: '', levels: '', offset: 0 });
 });
 
 test('parseSearch refuses anything that is not a plain, bounded search', () => {
@@ -26,7 +26,7 @@ test('parseSearch refuses anything that is not a plain, bounded search', () => {
     {}, { q: 'a' }, { q: 'x'.repeat(41) }, { q: "a%b" }, { q: 'a_b' }, { q: 'a;b' }, { q: 'a"b' }, { q: 'a\\b' },
     { q: 'ok', from: '2026-02-30' }, { q: 'ok', from: '1999-12-31' }, { q: 'ok', to: 'yesterday' },
     { q: 'ok', from: '2026-02-01', to: '2026-01-01' },
-    { q: 'ok', offset: '-50' }, { q: 'ok', offset: '25' }, { q: 'ok', offset: '1050' }, { q: 'ok', offset: '1e2' }, { q: 'ok', offset: 'x' },
+    { q: 'ok', levels: '6' }, { q: 'ok', levels: '0' }, { q: 'ok', levels: '1,' }, { q: 'ok', levels: '1;2' }, { q: 'ok', levels: "1'" }, { q: 'ok', levels: '1,2,3,4,5,1' }, { q: 'ok', offset: '-50' }, { q: 'ok', offset: '25' }, { q: 'ok', offset: '1050' }, { q: 'ok', offset: '1e2' }, { q: 'ok', offset: 'x' },
   ];
   for (const b of bad) assert.throws(() => parseSearch(params(b)), SearchError, JSON.stringify(b));
 });
@@ -99,7 +99,7 @@ test('GET /api/inspection-search: results, validation, method, failure and rate 
   assert.equal(ok.status, 200);
   assert.equal(ok.headers.get('cache-control'), 'no-store');
   assert.equal((await ok.json()).results[0].place, 'FORT COLLINS POE NB');
-  assert.deepEqual(seen[0], { q: 'COLLINS', from: '2026-01-01', to: '', offset: 0 });
+  assert.deepEqual(seen[0], { q: 'COLLINS', from: '2026-01-01', to: '', levels: '', offset: 0 });
 
   assert.equal((await fetch(`${base}/api/inspection-search`)).status, 400);
   assert.equal((await fetch(`${base}/api/inspection-search?q=a%25b`)).status, 400);
@@ -121,9 +121,27 @@ test('the page wires the search in: script loaded after app.js, cached by the se
   const read = (f) => readFile(new URL(`../public/${f}`, import.meta.url), 'utf8');
   const html = await read('index.html');
   assert.ok(html.includes('src="search.js"') && html.indexOf('src="search.js"') > html.indexOf('src="app.js"'));
-  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 's-csv', 'search-form']) {
-    assert.ok(html.includes(`id="${id}"`), id);
+  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 's-csv', 'search-form', 'class="s-level"']) {
+    assert.ok(html.includes(id.startsWith('class') ? id : `id="${id}"`), id);
   }
   assert.match(await read('sw.js'), /'\/search\.js'/);
   assert.match(await read('search.js'), /\/api\/inspection-search\.csv/);
+});
+
+test('level filter: normalised, all five means none, and it reaches the query as quoted values', () => {
+  assert.equal(parseSearch(params({ q: 'ok', levels: '3,1,3' })).levels, '1,3');
+  assert.equal(parseSearch(params({ q: 'ok', levels: '5,4,3,2,1' })).levels, '');
+  assert.equal(parseSearch(params({ q: 'ok' })).levels, '');
+  const where = buildUrl(parseSearch(params({ q: 'ok', levels: '3,1' }))).searchParams.get('$where');
+  assert.ok(where.endsWith("AND insp_level_id in('1','3')"), where);
+  assert.ok(!buildUrl(parseSearch(params({ q: 'ok' }))).searchParams.get('$where').includes('insp_level_id'));
+});
+
+test('a different level filter is a different cache entry', async () => {
+  let calls = 0;
+  const searcher = createSearcher({ fetchImpl: async () => { calls++; return { ok: true, json: async () => [] }; } });
+  await searcher(parseSearch(params({ q: 'ok', levels: '1' })));
+  await searcher(parseSearch(params({ q: 'ok', levels: '3' })));
+  await searcher(parseSearch(params({ q: 'ok', levels: '1' })));
+  assert.equal(calls, 2);
 });

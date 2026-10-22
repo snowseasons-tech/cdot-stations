@@ -104,6 +104,14 @@
         <label>From <input id="s-from" type="date" min="2000-01-01"></label>
         <label>To <input id="s-to" type="date" min="2000-01-01"></label>
       </div>
+      <fieldset class="s-levels">
+        <legend>Inspection level</legend>
+        <label title="Full: driver and vehicle"><input type="checkbox" class="s-level" value="1" checked> I</label>
+        <label title="Walk-around"><input type="checkbox" class="s-level" value="2" checked> II</label>
+        <label title="Driver / credentials only"><input type="checkbox" class="s-level" value="3" checked> III</label>
+        <label title="Special study"><input type="checkbox" class="s-level" value="4" checked> IV</label>
+        <label title="Vehicle only"><input type="checkbox" class="s-level" value="5" checked> V</label>
+      </fieldset>
       <button id="s-go" type="submit">Search</button>
     </form>
     <p id="s-status" class="sub" aria-live="polite"></p>

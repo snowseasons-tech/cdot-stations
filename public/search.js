@@ -41,11 +41,14 @@
   const params = (offset) => {
     const p = new URLSearchParams();
     for (const [key, id] of [['q', 's-q'], ['from', 's-from'], ['to', 's-to']]) if ($(id).value.trim()) p.set(key, $(id).value.trim());
+    const picked = [...document.querySelectorAll('.s-level')].filter((b) => b.checked).map((b) => b.value);
+    if (picked.length && picked.length < 5) p.set('levels', picked.join(',')); // all five is the same as no filter
     p.set('offset', String(offset));
     return p;
   };
 
   async function run(offset) {
+    if (offset === 0 && !document.querySelector('.s-level:checked')) { $('s-status').textContent = 'Pick at least one inspection level.'; return; }
     const mine = ++latest;
     const p = offset === 0 ? params(0) : query;
     if (offset > 0) p.set('offset', String(offset));

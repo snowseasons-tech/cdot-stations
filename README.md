@@ -608,6 +608,7 @@ There are four layers, from fast and local to slow and realistic.
 
 **Writing tests**
 - Use Node's built-in runner (`node:test`, `node:assert/strict`); no test framework is installed.
+- Tests ignore the developer's environment: `test/setup.mjs` clears `STATUS_TOKEN`, `VAPID_*`, `STATUS_FILE` and similar before every test file, so exporting real keys in your terminal can't make the suite fail. Pass what a test needs to `createApp` explicitly.
 - API tests start the server with `createApp()` on port 0 and register cleanup with `t.after(...)` so a failed assertion can't leave a server running and hang the suite.
 - Pass temp file paths to `createApp` (`statusFile`, `inspectionsFile`, ...) instead of touching `data/`. Don't call live services (CDOT, FMCSA, GitHub) from `npm test`; test the parsing and guard logic with sample data.
 - Shell scripts are tested by running them with stubs on `PATH` (see `test/alerts.test.js`, which fakes `gh`) or against a throwaway container (`test/e2e/backup.sh`).
@@ -703,6 +704,24 @@ A mobile app is wanted, for the team only, on **iPhone and Android**, hosted by 
 - **Sessions expire:** when an Access sign-in lapses, the page's API calls get a sign-in page instead of JSON. The app must detect that (a non-JSON response) and send the person to sign in again instead of showing a broken page. The service worker must not cache those responses.
 - **Keep the LAN route:** the home-network address keeps working, and the importer and backup scripts keep using it, so they don't need to pass through Access.
 - **Write protection stays.** Access decides who can *open* the site; the write token (later, per-person logins) still decides who can *change* a status.
+
+### Possible: paid plans
+
+Proposed, not decided or started. Two tiers for contractors:
+
+| Tier | Price | For |
+|---|---|---|
+| **Starter** | $49 a month | Solo contractors (one seat) |
+| **Professional** | $149 a month | Small teams, up to 5 seats |
+
+Still open: what each tier includes beyond the seat count, whether there is a trial or annual pricing, and who the customers' data and notes belong to. Everything below is what the current app would have to gain or change first, so these are prerequisites and not a design.
+
+- **Per-person accounts and seats.** Today there is one shared write token and a team email list in Cloudflare Access (free for a small team, and meant for staff, not customers). A paid product needs its own sign-in, a seat count per customer, and logins that make changes attributable. This is the same "per-person logins" item as in the mobile plan, and the two should be done together.
+- **Billing.** A payment provider, subscription state (active, past due, cancelled), and the app enforcing it. Never store card details here.
+- **Separate customers' data.** Status, notes and followers are one shared set today. Decide whether each customer sees one common set of stations (the public data is common anyway) or has private notes and follow lists, and build the isolation to match.
+- **A product that stands behind its numbers.** The app is unofficial and its open/closed status is only what someone typed in; the inspection figures come from FMCSA files that lag. Selling it means being clear about that (terms of use, a disclaimer, and probably a real status source; see "A real status source").
+- **Hosting fit for a paid service.** It runs as one instance on a home server behind a home network, with no uptime guarantee, and holds up to 500 push subscriptions. Charging customers means moving to hosting with monitoring and a recovery plan, and lifting the single-instance and subscription limits (see Known limits and "A real datastore").
+- **Support, privacy and legal basics.** A privacy policy (push subscriptions and emails are personal data), a way to cancel and export data, and somewhere customers can get help.
 
 ### Later: features
 

@@ -62,6 +62,7 @@
     if (!ready) return;
     for (const card of document.querySelectorAll('.card[data-station]')) {
       const id = card.dataset.station;
+      if (stations.find((x) => x.id === id)?.planned) continue; // a planned station can't change, so there is nothing to follow
       let button = card.querySelector('.follow-btn');
       if (!button) {
         let actions = card.querySelector('.actions');

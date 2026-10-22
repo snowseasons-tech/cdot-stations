@@ -1,0 +1,9 @@
+.git
+.github
+.claude
+node_modules
+test
+examples
+data/status.json
+data/status.json.tmp
+*.md

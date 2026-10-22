@@ -33,6 +33,22 @@ Set `STATUS_TOKEN` before exposing this beyond localhost.
 - Data is as reported to FMCSA: late uploads mean the latest month is partial.
 - API: `GET /api/stations/:id/inspections?months=1-36`; a 12-month summary is also on each station in `GET /api/stations`.
 
+## Deploy
+
+Pushing to `main` runs `.github/workflows/deploy.yml`: tests first, then it builds the Docker image and publishes it to GitHub Container Registry as `ghcr.io/snowseasons-tech/cdot-stations` (tags `latest` and the commit SHA). Pull requests only run the tests. The package is private by default, so the host needs a token with `read:packages` to pull it.
+
+```bash
+docker run -d --name cdot-stations --restart unless-stopped -p 3000:3000 \
+  -e STATUS_TOKEN=<long random string> \
+  -v cdot-data:/var/lib/cdot \
+  ghcr.io/snowseasons-tech/cdot-stations:latest
+```
+
+- The container binds `0.0.0.0` and **refuses to start without `STATUS_TOKEN`** (override with `ALLOW_OPEN_WRITES=1` only on a private network). Reads are public; writing status or importing requires the token.
+- Status and history are stored in `STATUS_FILE` (`/var/lib/cdot/status.json` in the image). Mount a volume there or they are lost when the container is replaced.
+- Station and inspection data are baked into the image. To refresh them, run `npm run sync` / `npm run sync:inspections`, commit, and push; the workflow rebuilds the image.
+- Put it behind HTTPS (Caddy, nginx or your host's proxy) since the token travels in a header.
+
 ## Importing status
 
 There is no official CSP/CDOT open/closed feed (checked CSP's Port of Entry page and COtrip, whose ports-of-entry map layer sits behind an undocumented API), so imports come from adapters you point at a source. Imported entries are tagged with their source and shown as "via <source>" in the UI.

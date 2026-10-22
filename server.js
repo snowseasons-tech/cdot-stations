@@ -10,7 +10,7 @@ const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
-export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), statusFile = join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN } = {}) {
+export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
   const store = new Store(statusFile);
@@ -87,5 +87,10 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3000);
   const host = process.env.HOST ?? '127.0.0.1';
+  const loopback = ['127.0.0.1', 'localhost', '::1'].includes(host);
+  if (!loopback && !process.env.STATUS_TOKEN && process.env.ALLOW_OPEN_WRITES !== '1') {
+    console.error(`Refusing to listen on ${host} without STATUS_TOKEN: anyone could change station status. Set STATUS_TOKEN (or ALLOW_OPEN_WRITES=1 to override).`);
+    process.exit(1);
+  }
   (await createApp()).listen(port, host, () => console.log(`CDOT stations tracker on http://${host}:${port}`));
 }

@@ -63,3 +63,13 @@ test('groupStations merges directions and flags planned sites', () => {
   assert.equal(out[1].id, 'platteville');
   assert.equal(out[1].planned, true);
 });
+
+test('refuses to listen on a public address without a token', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const run = (env) => spawnSync(process.execPath, ['server.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', ...env }, timeout: 1500, encoding: 'utf8' });
+  const refused = run({ HOST: '0.0.0.0' });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /STATUS_TOKEN/);
+  const allowed = run({ HOST: '0.0.0.0', STATUS_TOKEN: 'x' });
+  assert.notEqual(allowed.status, 1); // still running when the timeout killed it
+});

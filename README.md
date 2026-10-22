@@ -13,7 +13,7 @@ npm run sync:inspections   # refresh data/inspections.json from FMCSA
 
 ## How it works
 
-A small Node app (no npm dependencies) serves a one-page map and a JSON API. Station facts come from public sources and are baked into the app; only the open/closed status is written at runtime.
+A small Node app (one npm dependency, `web-push`, for notifications) serves a one-page map and a JSON API. Station facts come from public sources and are baked into the app; only the open/closed status is written at runtime.
 
 ```
  CDOT ports layer ─┐
@@ -82,7 +82,8 @@ The parts only meet through files and git: the data pipeline writes `data/*.json
 **Modules** (an arrow means "imports"):
 
 ```
-server.js ─► store.js          status.json: current status per station + capped history
+server.js ─► store.js ─► atomic-writer.js    status.json: current status per station + capped history
+          ─► push.js ─► atomic-writer.js     followers (subscriptions.json), notifier, web-push sender
           ─► auth.js           constant-time token check, failed-attempt lockout
           ─► importer.js ─► store.js     validates and applies imported records
           ─► inspections.js            monthly rows ─► per-station summaries, OOS rates
@@ -108,6 +109,7 @@ scripts/               ─ standalone; none import server code
 | `data/inspections.json` | `{ source, fetchedAt, through, rows: [{ station, month, level, total, vehicleOos, driverOos }] }` |
 | `data/inspection-locations.json` | `{ source, fetchedAt, through, coverage, locations: [{ id, name, kind, lat, lng, levels }] }` |
 | `status.json` (volume) | `{ current: { <id>: { status, note, updatedAt, source } }, history: [ ... last 1000 ... ] }` |
+| `subscriptions.json` (volume) | `{ subscriptions: { <hash>: { endpoint, keys, stations: ['all'] or [ids], createdAt, updatedAt } } }`, one per phone (max 500) |
 
 A station's `id` (a slug of its name) is the key everywhere: inspections and saved statuses refer to it, which is why the sync refuses to drop a station silently.
 
@@ -145,7 +147,7 @@ Each failure has a different safety net:
 
 ### Design decisions
 
-- **No dependencies, plain `node:http`.** Small surface to patch, nothing to install, tests need no tooling.
+- **Almost no dependencies, plain `node:http`.** The only package is `web-push`, used because web push's encryption and signed headers are easy to get subtly wrong. It is pinned to an exact version with a lockfile, installed without install scripts, and kept current by Dependabot PRs. Everything else is Node's standard library.
 - **JSON files, not a database.** Status is a few KB with one writer, so a file is simple to back up, diff and restore. The cost is below.
 - **Data baked into the image.** Predictable and fast; the cost is that fresher data means a (automatic) redeploy.
 - **Status has a source and a time.** Every update records where it came from (`manual` or an import name), so imports and people can coexist and stale imports can't overwrite newer entries.
@@ -232,6 +234,8 @@ Benchmark a temporary instance, not the production container, and stop it by PID
 | `PORT` / `HOST` | `3000` / `127.0.0.1` | Bind address |
 | `STATUS_TOKEN` | unset | If set, `PUT /api/stations/:id/status` and `POST /api/import` require `Authorization: Bearer <token>` |
 | `STATUS_FILE` | `data/status.json` | Where status and history are stored |
+| `SUBSCRIPTIONS_FILE` | `data/subscriptions.json` | Where push followers are stored |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | unset | Turn on push notifications (all three or none; see Notifications) |
 | `TRUST_PROXY` | unset | `1` = take the client address from the proxy's `X-Real-IP` (see Security) |
 | `ALLOW_OPEN_WRITES` | unset | `1` = allow listening on a non-local address without `STATUS_TOKEN` |
 
@@ -341,17 +345,46 @@ The page is an installable web app (a PWA), so the team can add it to a phone's 
 
 Service workers need HTTPS (or `localhost`), so over the plain-HTTP LAN address the page works but doesn't install.
 
+## Notifications
+
+**What it does.** People who installed the app can follow stations. When someone saves a change to a followed station's **status or note** (from the web page, the API, or an importer), each follower's phone shows a notification such as "Limon: Open: No wait". Tapping it opens the app on that station. Nothing else triggers one: new inspection data, the weekly refresh and map changes never do, and saving the same status and note again doesn't either. A newer notification about a station replaces the older one.
+
+**Using it** (the install steps are in [docs/install.md](docs/install.md)). In the installed app, tap **Follow** on a station, or turn on **Notify me about every station**. The first time, the phone asks for permission. Following is per phone and can be changed or removed any time. On iPhone, notifications work only in the app installed to the Home Screen, on iOS 16.4 or newer; on Android, Chrome.
+
+**How it works.**
+```
+status or note saved ─► store ─► notifier ─► web-push (encrypts, signs) ─► Apple / Google / Mozilla push service ─► phone ─► service worker shows it
+```
+Each phone's push subscription (an address at its push service plus encryption keys) is saved with the stations it follows in `subscriptions.json` on the data volume (backed up with the statuses). The server signs its requests with a VAPID key pair, and each message is encrypted so only that phone can read it: the push service only relays it. A phone the push service reports as gone is removed automatically. Sends happen in the background and never delay or fail a status update. Delivery is best effort and held for up to 6 hours.
+
+**Turning it on (one-time).** Notifications stay off until the server has a key pair. Generate one, keep the private key secret like the write token, and don't regenerate it later (every phone would have to follow again):
+
+```bash
+node scripts/generate-vapid-keys.js                       # prints a public and a private key
+gh variable set VAPID_PUBLIC_KEY --body <the public key>
+gh variable set VAPID_SUBJECT --body mailto:<an address you read>   # the contact push services can reach if the server misbehaves
+gh secret set VAPID_PRIVATE_KEY                           # paste the private key when asked
+```
+
+Then deploy (push a change, or re-run the workflow). The deploy writes the values to `~/cdot-stations/env`, and the server turns push on when all three are present; set only some and the deploy refuses, so a typo can't half-enable it. Check with `curl -s localhost:8080/api/push/key` (a key means on, `503` means off).
+
+**Good to know**
+- Anything typed into a status note is shown in the notification, including on a locked screen.
+- Anyone who can reach the site (it is behind the team sign-in) can follow stations; no token is needed because following is not a write to the status data.
+- The server needs outbound HTTPS to the push services; nothing needs to reach it from them.
+- Tests: `npm test` covers following, targeting (only followers of the changed station), and the real `web-push` sender against a local push service (signature and decryption verified). Whether a real phone receives a notification can only be checked on a real phone.
+
 ## Backups
 
-Station status and history live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
+Station status and history, and the list of who follows which station, live only in the `cdot-data` Docker volume, so they are backed up separately (station and inspection data come from git and are rebuilt with the image).
 
 `scripts/backup-run.sh` (which calls `scripts/backup-status.sh`) runs **daily at 03:30 server time** from cron (installed with `bash scripts/install-backup-cron.sh`; remove it with `crontab -e`). Each run:
 
-1. reads `status.json` from the running container (the app writes it atomically, so the copy is always consistent) and refuses to back up anything that isn't valid status data;
+1. reads `status.json` (and `subscriptions.json`, once anyone follows a station) from the running container (the app writes both atomically, so a copy is always consistent) and refuses to back up anything that isn't valid;
 2. saves a timestamped copy in `~/cdot-stations/backups/` unless nothing changed, keeping at least the 7 newest and deleting the rest after 30 days;
 3. commits the same file to the private repo [snowseasons-tech/cdot-stations-backup](https://github.com/snowseasons-tech/cdot-stations-backup), so you also survive losing the machine, and git keeps every version. It also updates `heartbeat.txt` there on every successful run (a small commit a day, even when no statuses exist yet); use `git log -- status.json` to see only real data changes.
 
-Output goes to `~/cdot-stations/backup.log`. A failed push leaves the local copy in place and the next run retries. The off-site push uses the stored `gh` login.
+`subscriptions.json` holds each phone's push address and keys, so it is only as private as the backup repository: keep that private. Restoring either kind of file uses the same command (it recognises which it is). Output goes to `~/cdot-stations/backup.log`. A failed push leaves the local copy in place and the next run retries. The off-site push uses the stored `gh` login.
 
 ### Alerts
 
@@ -391,7 +424,8 @@ To change the schedule, edit the `cron` line. Bot commits go straight to `main`;
 | **Status data** (who can change it) | Writes (`PUT .../status`, `POST /api/import`) need a bearer token, compared in constant time. After 10 failed attempts in a minute a client gets `429` and its token isn't checked again until the window passes. The server refuses to listen on a non-local address without a token. Input is validated (status must be open/closed/unknown, notes up to 280 characters, body size capped at 10 KB, 500 KB for imports), and for manual updates the server sets the source and time itself, so a caller can't forge them (an import may supply its own timestamp, but never one in the future, and it can't overwrite a newer status). |
 | **People using the page** (XSS and injection) | Notes and station names are put on the page as text, never as HTML. A Content-Security-Policy allows scripts only from this origin and unpkg (no inline scripts), connections only to this origin, and no framing; plus `nosniff`, a referrer policy and a permissions policy. API responses are `no-store`. Reads use no cookies, so there is no CSRF exposure: the token is sent in a header by the page's own code. |
 | **Files on the server** | Static files are served only from `public/` (paths are normalized and must stay inside it). |
-| **Third-party code** | Leaflet loads from unpkg at an exact version with Subresource Integrity hashes, so a tampered file won't run (`npm test` enforces the pin and hashes). The app itself has no npm dependencies to compromise. |
+| **Third-party code** | Leaflet loads from unpkg at an exact version with Subresource Integrity hashes, so a tampered file won't run (`npm test` enforces the pin and hashes). The one npm package, `web-push`, is pinned to an exact version with a committed lockfile, installed with scripts disabled (none of its 17 packages has an install script), and checked with `npm audit` (no known vulnerabilities when added); Dependabot opens weekly update PRs. |
+| **Push notifications** | A follower's push address must belong to a real push service (Google, Mozilla, Apple or Microsoft, over HTTPS, no ports or credentials), because the server sends requests to it; otherwise anyone could aim the server at the home network. The follow endpoints accept only `application/json` and refuse requests the browser marks cross-site, so another website can't forge a subscription from a team member's browser; they are rate limited (30 a minute per client) and capped at 500 subscriptions. Messages are encrypted so only the subscribed phone can read them, and the VAPID private key is a secret like the write token. |
 | **Secrets** | The token lives in a GitHub secret, in `~/cdot-stations/env` on the server (mode 600), and is given to the container through `--env-file`, never on a command line or in the image. There are no SSH keys or cloud credentials: deploys use a runner on the server and the workflow's own short-lived token, and the registry login is removed after each deploy. |
 | **The container** | Runs as a non-root user, is published only on `127.0.0.1` (only the local nginx can reach it), and is health-checked. |
 | **Backups** | Go to a private GitHub repository. They contain only statuses and notes, nothing credential-like, but anything typed into a note is in them. |
@@ -489,7 +523,7 @@ To add a real CSP/COtrip/Drivewyze source later, create `adapters/<name>.js` exp
 
 **Can I add a station or fix a phone number?** Not by hand: stations come from CDOT's layer and an edit to `data/stations.json` would be overwritten at the next refresh. There is no override mechanism yet; if CDOT's data is wrong or incomplete, that is a feature to add.
 
-**Does it work on a phone?** Yes, and it installs as an app. Team members open `https://stations.snowseasonstech.net`, sign in with their email, and add it to the Home Screen; see [docs/install.md](docs/install.md). It is read-only for now, and notifications are planned (see the Roadmap).
+**Does it work on a phone?** Yes, and it installs as an app. Team members open `https://stations.snowseasonstech.net`, sign in with their email, and add it to the Home Screen; see [docs/install.md](docs/install.md). It is read-only for now. You can follow stations to be notified when they change (see Notifications).
 
 **Does it work offline?** The server needs no internet (it never calls CDOT, FMCSA or GitHub while running). The page does: Leaflet loads from unpkg and map tiles from OpenStreetMap.
 
@@ -503,6 +537,10 @@ echo '{"current":{},"history":[]}' > /tmp/empty.json && bash scripts/restore-sta
 **How do I get the data out?** The read API is open: `curl http://192.168.0.20:8080/api/stations` (stations, status and 12-month inspection summaries), `/api/stations/limon/inspections?months=36`, `/api/stations/limon/history`, and `/api/inspection-locations?levels=1,2,3&period=all`. All JSON.
 
 **Can it pull status from CSP, Drivewyze or PrePass?** There is no official feed to pull from. If you find one, it is one small adapter (see Contributing). The app doesn't track wait times or bypass programs; use a note on the status.
+
+**How do I get notified when a station changes?** In the installed app, tap **Follow** on a station (or turn on "Notify me about every station") and allow notifications when asked. When someone changes that station's status or note, your phone shows, for example, "Limon: Open: No wait"; tap it to open the station. See Notifications for what does and doesn't trigger one.
+
+**I'm not getting notifications.** See "Notifications don't arrive" under Troubleshooting. The usual causes are not having installed the app to the Home Screen (iPhone), an iPhone older than iOS 16.4, or notifications blocked in the phone's settings.
 
 **What time zone are times in?** Stored in UTC. The page shows relative times ("12 min ago") and your browser's local date for older updates.
 
@@ -537,6 +575,15 @@ Commands that mention `docker` need a user in the `docker` group. In a session s
 
 **Inspection numbers look old or low.** The newest month is partial (FMCSA data arrives late). Check `through` in `data/inspections.json`, and run the refresh on demand: `gh workflow run refresh-data.yml`. A refresh that fails with `refusing to overwrite` or `more than 20% fewer` is the safety net working: look at the source, and if the new data is right, run `FORCE=1 npm run sync:inspections` (or `sync:locations`, `sync`) locally, review the diff, and commit. `CDOT's layer no longer lists ...` means a station disappeared from CDOT's layer; its id keys saved statuses, so confirm before forcing.
 
+**Notifications don't arrive.**
+- *No "Notify me" panel and no Follow buttons:* the page isn't running as the installed app (an iPhone browser tab never offers push; install it first), the iPhone is older than iOS 16.4, or the server has no push keys. Check the server with `curl -s localhost:8080/api/push/key`: `503 push notifications are not configured` means set the `VAPID_*` values and redeploy.
+- *"Notifications are blocked":* turn them back on for the app in the phone's settings (Settings, then the app's name on iPhone; app info on Android), then reload.
+- *The panel says you follow nothing:* tap Follow on the stations you want. Following is per phone.
+- *Only some changes notify:* only a saved change to a status or note does. Saving the same values again, new inspection data, data refreshes and map changes never do.
+- *Nothing after following, and the server log shows `push to ... failed: 401` or `403`:* the VAPID keys changed since the phone followed. Unfollow and follow again on each phone. Don't regenerate the keys unless you have to.
+- *`failed: 410` or `404`:* the phone is gone or uninstalled the app; the server removes it automatically.
+- *Late or missing on a phone that was off or offline:* delivery is best effort and held for up to 6 hours; do-not-disturb and battery-saving modes can delay it.
+
 **Backups.** Read `~/cdot-stations/backup.log` first.
 - `no status file yet; nothing to back up` is normal until the first status is saved.
 - `cannot reach a running container named cdot-stations`: the container is down, or cron's user can't use docker. Check `docker ps` and `crontab -l`.
@@ -570,9 +617,9 @@ There are four layers, from fast and local to slow and realistic.
 
 ## Contributing
 
-**Setup.** Node 20 or newer; there is nothing to install (the app has no npm dependencies). `npm start` runs it on `127.0.0.1:3000`, `npm test` runs the suite (the Docker-based backup test, `bash test/e2e/backup.sh`, is separate and needs Docker).
+**Setup.** Node 20 or newer. Run `npm ci` once to install the single dependency (`web-push`). `npm start` runs it on `127.0.0.1:3000`, `npm test` runs the suite (the Docker-based backup test, `bash test/e2e/backup.sh`, is separate and needs Docker).
 
-**Keep it dependency-free.** The server, scripts and tests use only Node's standard library, and the page is plain JavaScript with Leaflet loaded from a CDN. Think twice before adding a package: it has to be copied into the image and kept patched.
+**Keep dependencies to a minimum.** The server, scripts and tests use Node's standard library, and the page is plain JavaScript with Leaflet loaded from a CDN. There is exactly one npm package, `web-push`. Think twice before adding another: it has to be pinned, installed in the image and kept patched. Any new one needs a reason written in the pull request.
 
 **Workflow.** Every push to `main` that passes the tests is published and deployed to the server, so treat `main` as production.
 1. Make the change and run `npm test`. Add a test alongside the code (`test/*.test.js`); bug fixes should come with one that fails without the fix.
@@ -629,11 +676,7 @@ A mobile app is wanted, for the team only, on **iPhone and Android**, hosted by 
 **Plan**
 1. **Reach the server from anywhere: done.** A Cloudflare Tunnel with Cloudflare Access at `https://stations.snowseasonstech.net` (set up and verified 2026-10-21; see "Public access through Cloudflare" for how it works and how to turn it off).
 2. **Installable web app, read-only: done.** A manifest and a minimal service worker on the existing page: it installs to the home screen from a link and opens full-screen. See "Installable app" below and [docs/install.md](docs/install.md), the guide for the team.
-3. **Notifications (web push).** Decided: **a saved change to a station's status or note notifies its followers, and nothing else does** (a new inspection summary, a data refresh or a map update never does) (re-importing identical data changes nothing, so it doesn't). People **follow stations** from the app, one at a time or all of them. Needs, in order:
-   - *Change events on the server.* The status store already knows the previous entry when it saves a new one, so it emits an event for each station that changed. Narrowing this later (for example to open/closed flips only) is a small change.
-   - *Subscriptions.* Each phone registers a push subscription and the stations it follows. Keep them in their own file on the status volume (so restoring statuses doesn't wipe who is subscribed), include that file in the backup, and drop a subscription when the push service reports it gone. The subscribe endpoint is a new unauthenticated write, so it needs a rate limit and a cap on total subscriptions, or to sit behind the team sign-in from step 1.
-   - *Sending.* Web push needs VAPID keys (a new secret, stored like the token) and encrypted delivery. **Decided: the `web-push` package** (see below).
-   - *In the app:* a follow button per station, an "all stations" shortcut, and an unfollow.
+3. **Notifications (web push): built; needs the one-time setup and a test on a real phone.** A saved change to a station's status or note notifies the people following it, and nothing else does. See "Notifications" for how to turn it on.
 4. **Updating statuses from the phone.** Needs per-person logins and the status history on the page first, so changes are attributable. This is the "want to change that" step.
 5. **Native wrapper (Capacitor) or native apps** only if a PWA turns out not to be enough.
 

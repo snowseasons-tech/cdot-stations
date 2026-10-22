@@ -39,6 +39,10 @@
   </aside>
   <main>
     <aside id="side">
+      <section id="notify" aria-label="Notifications" hidden>
+        <label class="toggle"><input type="checkbox" id="notify-all"> <strong>Notify me about every station</strong></label>
+        <p id="notify-note" class="sub" aria-live="polite"></p>
+      </section>
       <section id="layers" aria-label="Inspection locations">
         <label class="toggle"><input type="checkbox" id="loc-show"> <strong>Show inspection locations on the map</strong></label>
         <div id="loc-options" hidden>
@@ -83,6 +87,7 @@
   </dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="app.js"></script>
+  <script src="follow.js"></script>
   <script src="install.js"></script>
 </body>
 </html>

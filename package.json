@@ -15,5 +15,8 @@
     "test": "node --test \"test/*.test.js\"",
     "sync:locations": "node scripts/sync-inspection-locations.js",
     "build:places": "node scripts/build-places.js"
+  },
+  "dependencies": {
+    "web-push": "3.6.7"
   }
 }

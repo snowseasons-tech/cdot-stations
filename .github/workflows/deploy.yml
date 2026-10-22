@@ -14,6 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: npm ci --ignore-scripts
       - run: npm test
 
   publish:
@@ -75,11 +76,26 @@ jobs:
       - name: Write app config
         env:
           STATUS_TOKEN: ${{ secrets.STATUS_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
         run: |
           [ -n "$STATUS_TOKEN" ] || { echo "::error::STATUS_TOKEN secret is not set"; exit 1; }
+          # Push notifications need all three VAPID values, or none (then they are simply off).
+          set_count=0
+          for v in "$VAPID_PUBLIC_KEY" "$VAPID_PRIVATE_KEY" "$VAPID_SUBJECT"; do [ -n "$v" ] && set_count=$((set_count + 1)); done
+          if [ "$set_count" -ne 0 ] && [ "$set_count" -ne 3 ]; then
+            echo "::error::Push is partly configured: set all of the VAPID_PUBLIC_KEY and VAPID_SUBJECT variables and the VAPID_PRIVATE_KEY secret, or none"
+            exit 1
+          fi
           umask 077
           mkdir -p ~/cdot-stations
-          printf 'STATUS_TOKEN=%s\n' "$STATUS_TOKEN" > ~/cdot-stations/env
+          {
+            printf 'STATUS_TOKEN=%s\n' "$STATUS_TOKEN"
+            if [ "$set_count" -eq 3 ]; then
+              printf 'VAPID_PUBLIC_KEY=%s\nVAPID_PRIVATE_KEY=%s\nVAPID_SUBJECT=%s\n' "$VAPID_PUBLIC_KEY" "$VAPID_PRIVATE_KEY" "$VAPID_SUBJECT"
+            fi
+          } > ~/cdot-stations/env
 
       - name: Log in to GHCR
         env:

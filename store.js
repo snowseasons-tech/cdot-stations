@@ -1,15 +1,19 @@
 // Status storage: data/status.json holds the current status per station plus an append-only history.
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { AtomicWriter } from './atomic-writer.js';
 
 export const STATUSES = ['open', 'closed', 'unknown'];
 const MAX_NOTE = 280;
 const MAX_HISTORY = 1000;
 
 export class Store {
-  constructor(file) {
+  // onChange({ id, previous, current }) is called after a change to a station's status or note has been saved
+  // (not for a repeat of what is already stored), so something like push notifications can react to it.
+  constructor(file, { onChange } = {}) {
     this.file = file;
+    this.onChange = onChange;
     this.state = { current: {}, history: [] };
-    this.writes = Promise.resolve();
+    this.writer = new AtomicWriter(file);
   }
 
   async load() {
@@ -32,23 +36,18 @@ export class Store {
     if (!STATUSES.includes(status)) throw new RangeError(`status must be one of ${STATUSES.join(', ')}`);
     if (typeof note !== 'string' || note.length > MAX_NOTE) throw new RangeError(`note must be a string up to ${MAX_NOTE} characters`);
     const entry = { status, note: note.trim(), updatedAt, source };
+    const previous = this.get(id);
     this.state.current[id] = entry;
     this.state.history.push({ id, ...entry });
     this.state.history = this.state.history.slice(-MAX_HISTORY);
     await this.save();
+    if (this.onChange && (previous.status !== entry.status || previous.note !== entry.note)) {
+      try { this.onChange({ id, previous, current: entry }); } catch (e) { console.error('onChange failed:', e.message); } // never fails the write
+    }
     return entry;
   }
 
-  // Disk writes run one at a time: they all use the same temp file, so overlapping writes would race on the
-  // rename. Memory is updated immediately; each write saves whatever the state is when its turn comes, and a
-  // failed write doesn't stop the ones queued behind it.
   save() {
-    const write = this.writes.then(async () => {
-      const tmp = `${this.file}.tmp`;
-      await writeFile(tmp, JSON.stringify(this.state, null, 2));
-      await rename(tmp, this.file);
-    });
-    this.writes = write.catch(() => {});
-    return write;
+    return this.writer.save(() => this.state);
   }
 }

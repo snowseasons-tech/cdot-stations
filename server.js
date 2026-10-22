@@ -6,7 +6,8 @@ import { Store } from './store.js';
 import { importStatuses } from './importer.js';
 import { summarize } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
-import { FailureLimiter, tokenMatches } from './auth.js';
+import { FailureLimiter, RateLimiter, tokenMatches } from './auth.js';
+import { Subscriptions, LimitReached, createNotifier, createWebPushSender, loadPushConfig, validateRequest, isPushEndpoint } from './push.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -37,11 +38,19 @@ const TYPES = {
   '.webmanifest': 'application/manifest+json', '.png': 'image/png',
 };
 
-export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), locationsFile = join(ROOT, 'data/inspection-locations.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter() } = {}) {
+export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), locationsFile = join(ROOT, 'data/inspection-locations.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter(),
+  subscriptionsFile = process.env.SUBSCRIPTIONS_FILE ?? join(ROOT, 'data/subscriptions.json'),
+  pushConfig = loadPushConfig(), pushSender, pushLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }) } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
   const locations = await readFile(locationsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
-  const store = new Store(statusFile);
+  // Push notifications are on only when the VAPID keys are configured; otherwise the /api/push routes answer 503.
+  const subscriptions = new Subscriptions(subscriptionsFile);
+  await subscriptions.load();
+  const notifier = pushConfig
+    ? createNotifier({ subscriptions, stations, sender: pushSender ?? await createWebPushSender(pushConfig) })
+    : null;
+  const store = new Store(statusFile, { onChange: (event) => notifier?.notify(event) }); // fire and forget: never delays a save
   await store.load();
   const find = (id) => stations.find((s) => s.id === id);
   const view = (s) => ({ ...s, ...store.get(s.id), inspections: summarize(inspections, s.id) });
@@ -81,7 +90,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
     return JSON.parse(Buffer.concat(chunks).toString() || '{}');
   };
 
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     try {
       const { pathname } = new URL(req.url, 'http://x');
@@ -107,6 +116,28 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         return json(res, 405, { error: 'method not allowed' });
       }
       if (m) return json(res, 405, { error: 'method not allowed' });
+
+      if (pathname.startsWith('/api/push/')) {
+        if (!notifier) return json(res, 503, { error: 'push notifications are not configured' });
+        if (pathname === '/api/push/key' && req.method === 'GET') return json(res, 200, { publicKey: pushConfig.publicKey });
+        if (!['/api/push/subscribe', '/api/push/following', '/api/push/unsubscribe'].includes(pathname)) return json(res, 404, { error: 'not found' });
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+        // These POSTs need no token (the site is behind the team sign-in), so make them hard to forge from another
+        // website: JSON only (a cross-site page can't send that without a CORS preflight, which is never granted),
+        // and refuse anything the browser marks as cross-site.
+        if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) return json(res, 415, { error: 'content-type must be application/json' });
+        if (req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, { error: 'cross-site requests are not allowed' });
+        const wait = pushLimiter.allow(clientOf(req));
+        if (wait) { res.setHeader('retry-after', wait); return json(res, 429, { error: 'too many requests; try again later' }); }
+        const body = await readBody(req, 4_096);
+        if (pathname === '/api/push/subscribe') {
+          const { subscription, stations: followed } = validateRequest(body, new Set(stations.map((s) => s.id)));
+          return json(res, 200, await subscriptions.set(subscription, followed));
+        }
+        if (!isPushEndpoint(body.endpoint)) return json(res, 400, { error: 'endpoint must be a push service address' });
+        if (pathname === '/api/push/following') return json(res, 200, { stations: subscriptions.following(body.endpoint) });
+        return json(res, 200, await subscriptions.remove(body.endpoint));
+      }
 
       if (pathname === '/api/inspection-locations') {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
@@ -138,9 +169,12 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', ...extra });
       res.end(body);
     } catch (e) {
+      if (e instanceof LimitReached) return json(res, 503, { error: e.message });
       json(res, e instanceof RangeError || e instanceof SyntaxError ? 400 : 500, { error: e.message });
     }
   });
+  server.push = { subscriptions, notifier }; // exposed for tests
+  return server;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -141,3 +141,94 @@ test('detectPlatform recognises iPhone, iPad (even disguised as a Mac), Android,
   assert.equal(detectPlatform('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36').os, 'android');
   assert.equal(detectPlatform('Mozilla/5.0 (X11; Linux x86_64) Chrome/120', { standalone: true }).standalone, true);
 });
+
+// ---- push handling in the service worker
+function pushWorker({ windows = [] } = {}) {
+  const handlers = {}; const shown = []; const opened = []; const waits = [];
+  const self = {
+    location: { origin: 'https://app.test' },
+    addEventListener: (type, fn) => { handlers[type] = fn; },
+    registration: { showNotification: async (title, options) => { shown.push({ title, ...options }); } },
+    clients: { matchAll: async () => windows, openWindow: async (url) => { opened.push(url); }, claim: async () => {} },
+  };
+  vm.runInNewContext(readFileSyncText(), { self, caches: {}, fetch: async () => {}, URL, Promise });
+  const event = (extra) => ({ waitUntil: (p) => waits.push(p), ...extra });
+  return {
+    shown, opened,
+    async push(data) { handlers.push(event({ data })); await Promise.all(waits.splice(0)); },
+    async click(url) { let closed = false; handlers.notificationclick(event({ notification: { close: () => { closed = true; }, data: url === undefined ? undefined : { url } } })); await Promise.all(waits.splice(0)); return closed; },
+  };
+}
+
+test('a push shows a notification with the server\'s title, text and tag, and opens that station when tapped', async () => {
+  const w = pushWorker();
+  await w.push({ json: () => ({ title: 'Limon: Open', body: 'No wait', tag: 'limon', url: '/?station=limon' }) });
+  assert.equal(w.shown.length, 1);
+  assert.deepEqual([w.shown[0].title, w.shown[0].body, w.shown[0].tag, w.shown[0].renotify, w.shown[0].data.url], ['Limon: Open', 'No wait', 'limon', true, '/?station=limon']);
+  assert.match(w.shown[0].icon, /icon-192/);
+});
+
+test('a malformed or empty push still shows a notification (phones require one)', async () => {
+  const w = pushWorker();
+  await w.push({ json: () => { throw new SyntaxError('bad'); }, text: () => 'plain text' });
+  await w.push(undefined);
+  await w.push({ json: () => ({ title: 42, body: { x: 1 } }) });
+  assert.equal(w.shown.length, 3);
+  assert.deepEqual(w.shown.map((n) => n.title), ['Station update', 'Station update', 'Station update']);
+  assert.equal(w.shown[0].body, 'plain text');
+  assert.equal(w.shown[2].body, '');
+  assert.equal(w.shown[2].renotify, false);
+});
+
+test('tapping a notification focuses an open window or opens one, and never leaves this site', async () => {
+  const navigated = []; let focused = 0;
+  const open = { url: 'https://app.test/', navigate: async (u) => { navigated.push(u); }, focus: async () => { focused++; } };
+  const withWindow = pushWorker({ windows: [open] });
+  assert.equal(await withWindow.click('/?station=limon'), true); // the notification is closed
+  assert.deepEqual(navigated, ['https://app.test/?station=limon']);
+  assert.equal(focused, 1);
+  assert.deepEqual(withWindow.opened, []);
+
+  const closedApp = pushWorker();
+  await closedApp.click('/?station=cortez');
+  assert.deepEqual(closedApp.opened, ['https://app.test/?station=cortez']);
+
+  const hostile = pushWorker();
+  await hostile.click('https://evil.example/phish');
+  await hostile.click('//evil.example/phish');
+  await hostile.click(undefined);
+  assert.deepEqual(hostile.opened, ['https://app.test/', 'https://app.test/', 'https://app.test/']);
+});
+
+// ---- follow helpers
+test('follow helpers: toggling stations, "all", and decoding the server key', async () => {
+  const sandbox = { window: {}, atob: (s) => Buffer.from(s, 'base64').toString('binary'), Uint8Array };
+  vm.runInNewContext((await read('follow.js')).toString(), sandbox);
+  const { nextFollowing, toggleAll, isFollowing, urlBase64ToUint8Array, sameBytes } = sandbox.window.followHelpers;
+  const all = ['cortez', 'dumont', 'limon'];
+  const L = (a) => JSON.stringify(a); // arrays from the sandbox compare by value
+
+  assert.equal(L(nextFollowing([], 'limon', all)), L(['limon']));
+  assert.equal(L(nextFollowing(['limon'], 'cortez', all)), L(['limon', 'cortez']));
+  assert.equal(L(nextFollowing(['limon', 'cortez'], 'limon', all)), L(['cortez']));
+  assert.equal(L(nextFollowing(['limon'], 'limon', all)), L([]));                          // last one off = unfollow everything
+  assert.equal(L(nextFollowing(['all'], 'limon', all)), L(['cortez', 'dumont']));           // "all" minus the tapped station
+  assert.equal(L(toggleAll([])), L(['all']));
+  assert.equal(L(toggleAll(['limon'])), L(['all']));
+  assert.equal(L(toggleAll(['all'])), L([]));
+  assert.equal(isFollowing(['all'], 'limon'), true);
+  assert.equal(isFollowing(['cortez'], 'limon'), false);
+
+  // url-safe base64 with and without padding decodes to the same bytes
+  const bytes = urlBase64ToUint8Array('SGVsbG8_Pz4-'); // "Hello??>>" with url-safe characters
+  assert.equal(Buffer.from(bytes).toString('latin1'), 'Hello??>>');
+  assert.equal(sameBytes(urlBase64ToUint8Array('SGk'), urlBase64ToUint8Array('SGk=')), true);
+  assert.equal(sameBytes(urlBase64ToUint8Array('SGk'), urlBase64ToUint8Array('SGo')), false);
+});
+
+test('the page has the notifications panel and loads the follow script', async () => {
+  const html = (await read('index.html')).toString();
+  assert.match(html, /id="notify"[^>]*hidden/);
+  assert.match(html, /id="notify-all"/);
+  assert.match(html, /<script src="follow\.js"><\/script>/);
+});

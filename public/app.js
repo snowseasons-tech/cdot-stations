@@ -50,6 +50,7 @@ function render() {
   for (const s of stations) {
     const st = stateOf(s);
     const card = el('article', { className: 'card', tabIndex: 0 });
+    card.dataset.station = s.id;
     card.append(
       el('h3', {}, s.name, el('span', { className: `badge ${st}`, textContent: st })),
       el('div', { className: 'meta', textContent: `${s.highway} · MP ${[...new Set(s.locations.map((l) => l.milepost))].join(' / ')} · ${s.locations.map((l) => l.direction).join(', ')}` }),
@@ -89,10 +90,26 @@ function render() {
   }
 }
 
+// A notification opens the app at /?station=<id>: bring that station's card into view once, then drop the parameter.
+function openStationFromLink() {
+  const id = new URLSearchParams(location.search).get('station');
+  if (!id) return;
+  const card = [...document.querySelectorAll('.card[data-station]')].find((c) => c.dataset.station === id);
+  if (!card) return;
+  history.replaceState(null, '', location.pathname);
+  card.scrollIntoView({ block: 'center' });
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 2500);
+  const station = stations.find((s) => s.id === id);
+  if (station) map.flyTo([station.locations[0].lat, station.locations[0].lng], 11);
+}
+
 async function load() {
   try {
     stations = (await getJson('/api/stations')).stations;
     render();
+    window.followUi?.decorate();
+    openStationFromLink();
     $('notice').hidden = true;
   } catch (error) {
     showNotice(error);

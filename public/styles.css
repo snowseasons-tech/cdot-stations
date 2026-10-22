@@ -50,3 +50,10 @@ a { color: var(--muted); }
 .install button { font:inherit; margin-right:8px; }
 /* The installed app is read-only for now: updates are made from the web page. */
 html.standalone .update-btn { display:none; }
+
+#notify { padding:12px 12px 0; }
+#notify .toggle { display:flex; gap:8px; align-items:center; cursor:pointer; }
+#notify-note { margin:6px 0 0; }
+.follow-btn[aria-pressed="true"] { background:var(--open); border-color:var(--open); color:#fff; }
+.follow-btn:disabled { opacity:.6; cursor:default; }
+.card.flash { outline:3px solid var(--open); transition:outline-color 1.5s; }

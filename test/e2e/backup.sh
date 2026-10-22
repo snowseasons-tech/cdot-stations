@@ -1,15 +1,17 @@
 # End-to-end test of scripts/backup-status.sh and restore-status.sh against a throwaway container and a local
 # bare git repo standing in for GitHub. Needs docker, jq and git; leaves the real deployment untouched.
-#   bash test/e2e/backup.sh [image]     (default image: the one the running cdot-stations container uses)
+#   bash test/e2e/backup.sh [image]     (default: builds an image from this checkout, so what is tested is what you have)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 T=$(mktemp -d)
-IMAGE=${1:-$(docker inspect -f '{{.Config.Image}}' cdot-stations)}
+if [ -n "${1:-}" ]; then IMAGE=$1; else IMAGE=cdot-e2e-test; docker build -q -t $IMAGE . >/dev/null; BUILT=1; fi
 export CONTAINER=cdot-backup-test BACKUP_BASE=$T/base BACKUP_REMOTE=$T/remote.git
 cleanup() { docker rm -f cdot-backup-test >/dev/null 2>&1 || true; docker volume rm -f cdot-backup-test-vol >/dev/null 2>&1 || true; }
-trap 'cleanup; rm -rf "$T"' EXIT; cleanup
+trap 'cleanup; [ -z "${BUILT:-}" ] || docker rmi cdot-e2e-test >/dev/null 2>&1 || true; rm -rf "$T"' EXIT; cleanup
 git init -q --bare -b main $T/remote.git; git clone -q $T/remote.git $T/seed 2>/dev/null; (cd $T/seed && git checkout -q -b main && echo seed > README && git add . && git -c user.name=t -c user.email=t@t commit -qm init && git push -q origin main)
-docker run -d --name cdot-backup-test -p 127.0.0.1:3998:3000 -e STATUS_TOKEN=t -v cdot-backup-test-vol:/var/lib/cdot "$IMAGE" >/dev/null
+keys=$(docker run --rm "$IMAGE" node scripts/generate-vapid-keys.js)  # push on, so followers can be created through the real API
+docker run -d --name cdot-backup-test -p 127.0.0.1:3998:3000 -e STATUS_TOKEN=t -v cdot-backup-test-vol:/var/lib/cdot \
+  -e VAPID_PUBLIC_KEY="$(sed -n 's/^VAPID_PUBLIC_KEY=//p' <<<"$keys")" -e VAPID_PRIVATE_KEY="$(sed -n 's/^VAPID_PRIVATE_KEY=//p' <<<"$keys")" -e VAPID_SUBJECT=mailto:test@example.com "$IMAGE" >/dev/null
 for _ in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' cdot-backup-test)" = healthy ] && break; sleep 1; done
 put() { curl -s -o /dev/null -X PUT -H 'content-type: application/json' -H 'authorization: Bearer t' -d "{\"status\":\"$2\",\"note\":\"$3\"}" http://127.0.0.1:3998/api/stations/$1/status; }
 expect() { [ "$1" = "$2" ] && echo "   ok: $2" || { echo "   FAIL: expected '$1', got '$2'" >&2; exit 1; }; }
@@ -37,4 +39,35 @@ expect "open unknown" "$(curl -s localhost:3998/api/stations/limon | jq -r .stat
 expect 1 "$(ls $T/base/backups | grep -c pre-restore)"
 echo "8) app can still write after a restore"; put cortez closed again; expect closed "$(curl -s localhost:3998/api/stations/cortez | jq -r .status)"
 expect '["cortez","limon"]' "$(git -C $T/remote.git show main:status.json | jq -c '[.current|keys[]]')"
+
+# ---- push followers (subscriptions.json)
+P256=$(printf 'B%.0s' $(seq 1 87)); AUTH=$(printf 'a%.0s' $(seq 1 22))
+follow() { curl -s -o /dev/null -X POST -H 'content-type: application/json' -d "{\"subscription\":{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/$1\",\"keys\":{\"p256dh\":\"$P256\",\"auth\":\"$AUTH\"}},\"stations\":[\"$2\"]}" http://127.0.0.1:3998/api/push/subscribe; }
+following() { curl -s -X POST -H 'content-type: application/json' -d "{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/$1\"}" http://127.0.0.1:3998/api/push/following | jq -c .stations; }
+sub_files() { find $T/base/backups -name 'subscriptions-*.json' | wc -l | tr -d ' '; }
+remote_subs() { git -C $T/remote.git show main:subscriptions.json 2>/dev/null | jq '.subscriptions | length' || echo 0; }
+
+echo "9) a follower is backed up locally and off-site, status backups are unaffected"
+expect 0 "$(sub_files)"
+sleep 1; follow phone-a limon; bash scripts/backup-status.sh
+expect "1 1" "$(sub_files) $(remote_subs)"
+expect 3 "$(status_commits)" # the third status commit is the status change made in step 8; adding a follower adds none
+
+echo "10) nothing changed: no new subscription copy"
+sleep 1; bash scripts/backup-status.sh; expect "1 1" "$(sub_files) $(remote_subs)"
+
+echo "11) a second follower makes a new copy and an off-site update"
+sleep 1; follow phone-b cortez; bash scripts/backup-status.sh; expect "2 2" "$(sub_files) $(remote_subs)"
+
+echo "12) a corrupted subscriptions file is refused"
+docker exec cdot-backup-test sh -c 'echo "{broken" > /var/lib/cdot/subscriptions.json'
+if bash scripts/backup-status.sh 2>&1; then echo "FAIL: corrupted subscriptions were backed up"; exit 1; fi; expect "2 2" "$(sub_files) $(remote_subs)"
+
+echo "13) restoring the first subscriptions backup brings back only the first follower (kind detected from the file)"
+first=$(find $T/base/backups -name 'subscriptions-*.json' | sort | head -1)
+bash scripts/restore-status.sh "$first" --yes | grep -E "Restoring|healthy"
+expect "$(printf '["limon"] []')" "$(printf '%s %s' "$(following phone-a)" "$(following phone-b)")"
+expect 1 "$(ls $T/base/backups | grep -c 'pre-restore-subscriptions')"
+expect closed "$(curl -s localhost:3998/api/stations/cortez | jq -r .status)" # statuses untouched by a subscriptions restore
+
 echo "backup e2e: all checks passed"

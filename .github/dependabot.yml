@@ -1,0 +1,13 @@
+# Weekly update PRs, so security fixes in the one npm dependency (web-push), the GitHub Actions and the Node base
+# image aren't missed. Each PR runs the tests; merging one to main deploys it like any other change.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }

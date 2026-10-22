@@ -27,11 +27,14 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - nginx site (`deploy/nginx-cdot-stations.conf`) forwarding LAN port 8080 to the app.
 - Weekly data refresh workflow: re-fetches CDOT and FMCSA data (including the inspection locations) and, only when it changed, commits it and triggers a deploy. The sync scripts refuse empty results, dropped stations, or more than 20% fewer inspections.
 - Daily backup of the status data to a local folder (30-day retention) and to a private GitHub repository, with a restore script.
+- Push notifications: people using the installed app can follow stations (or all of them) and are notified when a followed station's status or note changes, from the web page, the API or an importer. Followers are kept in `subscriptions.json` on the data volume and included in the backups and the restore script. Off until a VAPID key pair is configured (`scripts/generate-vapid-keys.js`; see the README, "Notifications").
 - Installable web app for iPhone and Android, read-only: add it to the Home Screen from `https://stations.snowseasonstech.net` ([docs/install.md](docs/install.md)). Includes a web app manifest and icons, a network-first service worker that never caches the API or sign-in redirects, an install card with iPhone steps, and a clear "Your sign-in has expired" message instead of a broken page. In the installed app the Update status buttons are hidden.
 - Public access for the team through a Cloudflare Tunnel with Cloudflare Access (email sign-in) at `https://stations.snowseasonstech.net`, with no router ports opened. Includes a runbook in the README and `scripts/check-public-access.sh`, which proves an unauthenticated visitor is sent to the sign-in instead of being served the app.
 - Alerts for backups through GitHub issues: one when a backup fails, and one when no backup has arrived for over 30 hours (server off, cron stopped).
 
 ### Security
+- The push follow endpoints only accept real push-service addresses (so the server can't be aimed at other hosts), JSON requests that aren't marked cross-site, and are rate limited and capped.
+- The project now has one npm dependency, `web-push`, pinned to an exact version with a lockfile and installed without install scripts; Dependabot opens weekly update PRs for it, the GitHub Actions and the Node base image.
 - Write endpoints require a bearer token (`STATUS_TOKEN`). The token is compared in constant time, and a client is locked out for a minute after 10 failed attempts. The server refuses to listen on a non-local address without a token.
 - Content-Security-Policy and other security headers on every response; API responses are not cacheable.
 - Leaflet is loaded from a CDN with a pinned version and Subresource Integrity hashes.

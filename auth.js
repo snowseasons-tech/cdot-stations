@@ -32,3 +32,14 @@ export class FailureLimiter {
     else e.count++;
   }
 }
+
+// Counts every request from a client (not just failures); once it has made `max` in the window it must wait.
+export class RateLimiter extends FailureLimiter {
+  // Returns 0 if the request may go ahead (and counts it), or the seconds to wait.
+  allow(client) {
+    const wait = this.retryAfter(client);
+    if (wait) return wait;
+    this.fail(client);
+    return 0;
+  }
+}

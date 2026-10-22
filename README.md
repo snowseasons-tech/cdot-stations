@@ -11,23 +11,77 @@ npm run sync         # refresh data/stations.json from CDOT
 npm run sync:inspections   # refresh data/inspections.json from FMCSA
 ```
 
+## How it works
+
+A small Node app (no npm dependencies) serves a one-page map and a JSON API. Station facts come from public sources and are baked into the app; only the open/closed status is written at runtime.
+
+```
+ CDOT ports layer ─┐
+                   ├─ weekly sync ─► data/*.json ─┐   (baked into the image)
+ FMCSA inspections ┘                              ▼
+ you / importers ── token ──► PUT, POST ────► server.js ──► JSON API ──► browser
+                                                  │                      (map + cards, refreshes every 60 s)
+                                                  ▼
+                                   status.json (Docker volume) ──► daily backup
+```
+
+**Three kinds of data, kept apart**
+
+| Data | Source | Changes | Lives in |
+|---|---|---|---|
+| Stations (name, highway, mileposts, phone, coordinates) | CDOT's public ports-of-entry layer | rarely | `data/stations.json`, in git and the image |
+| Inspections (North American Standard, monthly counts per level and out-of-service totals) | FMCSA's public Vehicle Inspection File | weekly refresh | `data/inspections.json`, in git and the image |
+| Status (open / closed / unknown, a note, history) | you, or an importer | whenever you update it | `status.json` on a Docker volume, not in git |
+
+**The server** (`server.js`) loads the two read-only data files into memory at startup and keeps status in a small store (`store.js`). It serves the static page from `public/` and the API below. Reads are public. Writing a status or importing needs the `STATUS_TOKEN` bearer token, and repeated wrong tokens lock a client out for a minute. Status is saved to `status.json` after every change by writing a temp file and renaming it, so a crash can't leave a half-written file; the last 1000 changes are kept as history. The file is read only at startup, which is why a restore restarts the container.
+
+**What a station shows.** `unknown` until someone reports it, then `open` or `closed` with an optional note (up to 280 characters) and the time and source of the update (`manual`, or the name of an import source). Platteville is `planned`: it is a future site, so it can't be given a status, though FMCSA has a few inspections recorded there. Each card also shows the last 12 months of inspections with vehicle and driver out-of-service rates, and the Inspections button opens a breakdown by level and by month. Summaries are computed from `data/inspections.json` when requested.
+
+**Where status comes from.** There is no official open/closed feed from CSP or CDOT, so status arrives two ways:
+- by hand, from "Update status" on a card (if the server requires a token, the page asks for it the first time and remembers it in the browser);
+- from an importer: `scripts/import-status.js` runs an adapter (a CSV or JSON file, or a JSON URL) and posts the records to `/api/import`, which validates them, skips bad or older records, ignores unchanged ones, and tags the rest with their source. A real CSP or other feed would be one more small adapter.
+
+**The page** (`public/`) is plain HTML, CSS and JavaScript plus Leaflet and OpenStreetMap tiles (pinned with integrity hashes). It fetches `/api/stations` every minute and redraws the cards and map pins; pin colour follows the station's state.
+
+**Keeping it running, all automatic** (details in the sections below)
+- *Data refresh:* a weekly workflow re-runs both sync scripts and, only if the data changed, commits it and triggers a deploy.
+- *Deploy:* a push to `main` runs the tests, builds the Docker image and boots it as a smoke test, publishes it to GitHub Container Registry, then a runner on the server swaps the container (rolling back if the new one isn't healthy). nginx forwards a LAN port to it.
+- *Backup:* a daily cron job copies `status.json` locally and to a private GitHub repo, and opens an issue if a backup fails or stops arriving.
+
+**Code map**
+
+| Path | What it does |
+|---|---|
+| `server.js`, `store.js`, `auth.js` | HTTP server and routes, status storage, token check and lockout |
+| `importer.js`, `adapters/` | Validates and applies imported statuses; sources of records |
+| `inspections.js` | Rolls monthly inspection rows up into per-station summaries and OOS rates |
+| `public/` | The web page |
+| `scripts/sync-*.js` | Fetch and aggregate CDOT and FMCSA data (with guards against bad fetches) |
+| `scripts/backup-*.sh`, `restore-status.sh` | Backup, alerting and restore |
+| `scripts/deploy.sh`, `setup-runner.sh`, `smoke-test-image.sh`, `install-nginx-site.sh` | Deployment helpers |
+| `test/` | Unit and API tests (`npm test`) and a Docker-based backup test (`test/e2e/`) |
+| `.github/workflows/` | `deploy.yml` (test, publish, deploy) and `refresh-data.yml` |
+
 ## Data
 
 - **Locations** come from CDOT's public [POELocations](https://services.arcgis.com/yzB9WM8W0BO3Ql7d/ArcGIS/rest/services/POELocations/FeatureServer) layer (last published 2019). Platteville is flagged as planned.
-- **Status** is *not* live. No official open/closed feed was found, so status is entered by hand and stored in `data/status.json` (gitignored), with the last 1000 changes kept as history.
+- **Status** is *not* live. No official open/closed feed was found, so status is entered by hand or imported (see Importing status) and stored in `data/status.json` (gitignored; `STATUS_FILE` in the container), with the last 1000 changes kept as history.
 
 ## Config
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `PORT` / `HOST` | `3000` / `127.0.0.1` | Bind address |
-| `STATUS_TOKEN` | unset | If set, `PUT /api/stations/:id/status` requires `Authorization: Bearer <token>` |
+| `STATUS_TOKEN` | unset | If set, `PUT /api/stations/:id/status` and `POST /api/import` require `Authorization: Bearer <token>` |
+| `STATUS_FILE` | `data/status.json` | Where status and history are stored |
+| `TRUST_PROXY` | unset | `1` = take the client address from the proxy's `X-Real-IP` (see Security) |
+| `ALLOW_OPEN_WRITES` | unset | `1` = allow listening on a non-local address without `STATUS_TOKEN` |
 
-Set `STATUS_TOKEN` before exposing this beyond localhost.
+Set `STATUS_TOKEN` before exposing this beyond localhost; the server refuses to listen on a non-local `HOST` without it.
 
 ## Inspections (North American Standard)
 
-`data/inspections.json` holds monthly counts per port and inspection level (I–VII), with vehicle and driver out-of-service (OOS) counts, aggregated from FMCSA's public [Vehicle Inspection File](https://data.transportation.gov/d/fx4q-ay7w) (no API key; FMCSA publishes about three years and updates daily). Run `npm run sync:inspections` to refresh it, e.g. monthly.
+`data/inspections.json` holds monthly counts per port and inspection level (I–VII), with vehicle and driver out-of-service (OOS) counts, aggregated from FMCSA's public [Vehicle Inspection File](https://data.transportation.gov/d/fx4q-ay7w) (no API key; FMCSA publishes about three years and updates daily). Run `npm run sync:inspections` to refresh it; a weekly workflow does this automatically (see Data refresh).
 
 - A port's inspections are rows with `insp_facility = 'F'` (fixed facility) whose `location_desc` is the port town (`LIMON CO`). Roadside rows in the same town are patrol stops and are excluded, as are other locations like "DOWNIEVILLE-LAWSON-DUMONT CO".
 - Vehicle OOS rate is over vehicle inspections (Levels I, II, V, VI); driver OOS rate over driver inspections (Levels I, II, III, VI), matching how FMCSA reports them.

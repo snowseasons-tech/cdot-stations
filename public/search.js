@@ -44,6 +44,7 @@
     const picked = [...document.querySelectorAll('.s-level')].filter((b) => b.checked).map((b) => b.value);
     if (picked.length && picked.length < 5) p.set('levels', picked.join(',')); // all five is the same as no filter
     if ($('s-oos').value) p.set('oos', $('s-oos').value);
+    if ($('s-state').value.trim()) p.set('state', $('s-state').value.trim());
     p.set('offset', String(offset));
     return p;
   };

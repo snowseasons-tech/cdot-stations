@@ -17,8 +17,8 @@ const row = (n, extra = {}) => ({
 
 test('parseSearch normalises a good search', () => {
   assert.deepEqual(parseSearch(params({ q: '  fort   collins ', from: '2026-01-01', to: '2026-01-31', offset: '50' })),
-    { q: 'FORT COLLINS', from: '2026-01-01', to: '2026-01-31', levels: '', oos: '', offset: 50 });
-  assert.deepEqual(parseSearch(params({ from: '2026-01-01' })), { q: '', from: '2026-01-01', to: '', levels: '', oos: '', offset: 0 });
+    { q: 'FORT COLLINS', from: '2026-01-01', to: '2026-01-31', levels: '', oos: '', state: '', offset: 50 });
+  assert.deepEqual(parseSearch(params({ from: '2026-01-01' })), { q: '', from: '2026-01-01', to: '', levels: '', oos: '', state: '', offset: 0 });
 });
 
 test('parseSearch refuses anything that is not a plain, bounded search', () => {
@@ -26,7 +26,7 @@ test('parseSearch refuses anything that is not a plain, bounded search', () => {
     {}, { q: 'a' }, { q: 'x'.repeat(41) }, { q: "a%b" }, { q: 'a_b' }, { q: 'a;b' }, { q: 'a"b' }, { q: 'a\\b' },
     { q: 'ok', from: '2026-02-30' }, { q: 'ok', from: '1999-12-31' }, { q: 'ok', to: 'yesterday' },
     { q: 'ok', from: '2026-02-01', to: '2026-01-01' },
-    { q: 'ok', oos: 'all' }, { q: 'ok', oos: 'toString' }, { q: 'ok', oos: "any'" }, { q: 'ok', levels: '6' }, { q: 'ok', levels: '0' }, { q: 'ok', levels: '1,' }, { q: 'ok', levels: '1;2' }, { q: 'ok', levels: "1'" }, { q: 'ok', levels: '1,2,3,4,5,1' }, { q: 'ok', offset: '-50' }, { q: 'ok', offset: '25' }, { q: 'ok', offset: '1050' }, { q: 'ok', offset: '1e2' }, { q: 'ok', offset: 'x' },
+    { q: 'ok', state: 'T' }, { q: 'ok', state: 'TEX' }, { q: 'ok', state: '1A' }, { q: 'ok', state: "T'" }, { q: 'ok', state: 'T_' }, { q: 'ok', oos: 'all' }, { q: 'ok', oos: 'toString' }, { q: 'ok', oos: "any'" }, { q: 'ok', levels: '6' }, { q: 'ok', levels: '0' }, { q: 'ok', levels: '1,' }, { q: 'ok', levels: '1;2' }, { q: 'ok', levels: "1'" }, { q: 'ok', levels: '1,2,3,4,5,1' }, { q: 'ok', offset: '-50' }, { q: 'ok', offset: '25' }, { q: 'ok', offset: '1050' }, { q: 'ok', offset: '1e2' }, { q: 'ok', offset: 'x' },
   ];
   for (const b of bad) assert.throws(() => parseSearch(params(b)), SearchError, JSON.stringify(b));
 });
@@ -99,7 +99,7 @@ test('GET /api/inspection-search: results, validation, method, failure and rate 
   assert.equal(ok.status, 200);
   assert.equal(ok.headers.get('cache-control'), 'no-store');
   assert.equal((await ok.json()).results[0].place, 'FORT COLLINS POE NB');
-  assert.deepEqual(seen[0], { q: 'COLLINS', from: '2026-01-01', to: '', levels: '', oos: '', offset: 0 });
+  assert.deepEqual(seen[0], { q: 'COLLINS', from: '2026-01-01', to: '', levels: '', oos: '', state: '', offset: 0 });
 
   assert.equal((await fetch(`${base}/api/inspection-search`)).status, 400);
   assert.equal((await fetch(`${base}/api/inspection-search?q=a%25b`)).status, 400);
@@ -121,7 +121,7 @@ test('the page wires the search in: script loaded after app.js, cached by the se
   const read = (f) => readFile(new URL(`../public/${f}`, import.meta.url), 'utf8');
   const html = await read('index.html');
   assert.ok(html.includes('src="search.js"') && html.indexOf('src="search.js"') > html.indexOf('src="app.js"'));
-  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 's-csv', 's-sql', 's-oos', 'search-form', 'class="s-level"']) {
+  for (const id of ['search-open', 's-q', 's-from', 's-to', 's-more', 's-results', 's-status', 's-go', 's-close', 's-csv', 's-sql', 's-oos', 's-state', 'search-form', 'class="s-level"']) {
     assert.ok(html.includes(id.startsWith('class') ? id : `id="${id}"`), id);
   }
   assert.match(await read('sw.js'), /'\/search\.js'/);
@@ -199,10 +199,24 @@ test('GET /api/inspection-search.sql: a .sql download with the same rules as the
   assert.match(ok.headers.get('content-disposition'), /^attachment; filename="inspections-\d{4}-\d{2}-\d{2}\.sql"$/);
   assert.equal(ok.headers.get('x-export-rows'), '2');
   assert.match(await ok.text(), /REPLACE INTO inspections/);
-  assert.deepEqual(seen[0], { q: 'COLLINS', from: '', to: '', levels: '3', oos: 'vehicle', offset: 0 });
+  assert.deepEqual(seen[0], { q: 'COLLINS', from: '', to: '', levels: '3', oos: 'vehicle', state: '', offset: 0 });
   assert.equal((await fetch(`${base}/api/inspection-search.sql`)).status, 400);
   assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`, { method: 'POST' })).status, 405);
   assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`, { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
   assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`)).status, 200);        // 2nd allowed
   assert.equal((await fetch(`${base}/api/inspection-search.sql?q=ok`)).status, 429);        // shares the export allowance with the CSV
+});
+
+test('state filter: normalised, quoted into the query, its own cache entry, and enough to search on its own', async () => {
+  assert.equal(parseSearch(params({ state: ' tx ' })).state, 'TX');
+  assert.equal(parseSearch(params({ q: 'ok' })).state, '');
+  const where = buildUrl(parseSearch(params({ state: 'tx', from: '2026-01-01' }))).searchParams.get('$where');
+  assert.ok(where.endsWith("AND insp_carrier_state = 'TX'"), where);
+  assert.ok(!buildUrl(parseSearch(params({ q: 'ok' }))).searchParams.get('$where').includes('insp_carrier_state'));
+  assert.doesNotThrow(() => parseSearch(params({ oos: 'any' })));                  // a filter alone is a search
+  assert.throws(() => parseSearch(params({})), SearchError);
+  let calls = 0;
+  const searcher = createSearcher({ fetchImpl: async () => { calls++; return { ok: true, json: async () => [] }; } });
+  for (const state of ['TX', 'NM', 'TX']) await searcher(parseSearch(params({ q: 'ok', state })));
+  assert.equal(calls, 2);
 });

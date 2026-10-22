@@ -53,23 +53,27 @@ export function parseSearch(params) {
   }
   const oos = params.get('oos') ?? '';
   if (oos && !Object.hasOwn(OOS_COLUMNS, oos)) throw new SearchError('oos must be any, vehicle or driver');
+  // The carrier's state, province or territory: FMCSA's two-letter code.
+  const state = (params.get('state') ?? '').trim().toUpperCase();
+  if (state && !/^[A-Z]{2}$/.test(state)) throw new SearchError('state must be a two-letter code such as TX');
   const raw = params.get('offset') ?? '0';
   if (!/^\d{1,4}$/.test(raw)) throw new SearchError(`offset must be a whole number from 0 to ${MAX_OFFSET}`);
   const offset = Number(raw);
   if (offset > MAX_OFFSET || offset % PAGE_SIZE !== 0) throw new SearchError(`offset must be a multiple of ${PAGE_SIZE} up to ${MAX_OFFSET}`);
-  if (!q && !from && !to) throw new SearchError('enter a place or carrier, or a date range');
-  return { q, from, to, levels, oos, offset };
+  if (!q && !from && !to && !state && !levels && !oos) throw new SearchError('enter a place or carrier, a date range, or choose a filter');
+  return { q, from, to, levels, oos, state, offset };
 }
 
 const quote = (s) => `'${s.replaceAll("'", "''")}'`;
 
-export function buildUrl({ q, from, to, levels = '', oos = '', offset }, limit = PAGE_SIZE + 1) {
+export function buildUrl({ q, from, to, levels = '', oos = '', state = '', offset }, limit = PAGE_SIZE + 1) {
   const where = ["report_state='CO'", "insp_facility='F'"];
   if (q) where.push(`(upper(location_desc) like ${quote(`%${q}%`)} OR upper(insp_carrier_name) like ${quote(`%${q}%`)})`);
   if (from) where.push(`insp_date >= ${quote(from.replaceAll('-', ''))}`);
   if (to) where.push(`insp_date <= ${quote(to.replaceAll('-', ''))}`);
   if (levels) where.push(`insp_level_id in(${levels.split(',').map((l) => quote(l)).join(',')})`);
   if (oos) where.push(`${OOS_COLUMNS[oos]} != '0'`);
+  if (state) where.push(`insp_carrier_state = ${quote(state)}`);
   const url = new URL(ENDPOINT);
   url.searchParams.set('$select', COLUMNS.join(','));
   url.searchParams.set('$where', where.join(' AND '));
@@ -110,7 +114,7 @@ export function shape(row) {
 export function createSearcher({ fetchImpl = fetch, now = Date.now } = {}) {
   const cache = new Map();
   return async (search) => {
-    const key = `${search.q}|${search.from}|${search.to}|${search.levels}|${search.oos}|${search.offset}`;
+    const key = `${search.q}|${search.from}|${search.to}|${search.levels}|${search.oos}|${search.state}|${search.offset}`;
     const hit = cache.get(key);
     if (hit && hit.expires > now()) {
       cache.delete(key);

@@ -3,7 +3,8 @@
 //
 // A port's inspections are rows with insp_facility = 'F' (fixed facility) whose location_desc is the
 // port's town, e.g. "LIMON CO". Roadside ('R') rows in the same town are patrol stops, not port inspections.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { readPrevious, writeIfChanged } from './data-file.js';
 
 const ENDPOINT = 'https://data.transportation.gov/resource/fx4q-ay7w.json';
 const STATIONS = new URL('../data/stations.json', import.meta.url);
@@ -43,6 +44,14 @@ async function query(stations, extraWhere = '') {
   return res.json();
 }
 
+const sum = (rows) => rows.reduce((n, r) => n + r.total, 0);
+
+// FMCSA only publishes a rolling three years, so a little shrinkage is normal; a big drop means a bad fetch.
+export function shrankTooMuch(previousRows, nextRows, limit = 0.2) {
+  const before = sum(previousRows ?? []);
+  return before > 0 && sum(nextRows) < before * (1 - limit);
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { stations } = JSON.parse(await readFile(STATIONS, 'utf8'));
   const [total, vehicleOos, driverOos] = await Promise.all([
@@ -52,7 +61,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   ]);
   const rows = buildRows(stations, total, vehicleOos, driverOos);
   if (!rows.length) throw new Error('FMCSA returned no inspections; refusing to overwrite data/inspections.json');
+  const previous = await readPrevious(OUT);
+  if (shrankTooMuch(previous?.rows, rows) && process.env.FORCE !== '1') {
+    throw new Error(`New data has ${sum(rows)} inspections vs ${sum(previous.rows)} before (more than 20% fewer). Review, then re-run with FORCE=1 if that's right.`);
+  }
   const through = rows.reduce((m, r) => (r.month > m ? r.month : m), '');
-  await writeFile(OUT, JSON.stringify({ source: ENDPOINT, fetchedAt: new Date().toISOString(), through, rows }) + '\n');
-  console.log(`Wrote ${rows.length} rows, ${rows.reduce((n, r) => n + r.total, 0)} inspections, through ${through}`);
+  const changed = await writeIfChanged(OUT, previous, { source: ENDPOINT, fetchedAt: new Date().toISOString(), through, rows });
+  console.log(changed ? `Updated: ${rows.length} rows, ${sum(rows)} inspections, through ${through}` : 'Inspections: no changes');
 }

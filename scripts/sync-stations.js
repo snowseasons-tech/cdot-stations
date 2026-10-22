@@ -1,6 +1,6 @@
 // Pulls CDOT's Ports of Entry layer and writes data/stations.json.
 // One station per port name; each travel direction becomes a location.
-import { writeFile } from 'node:fs/promises';
+import { readPrevious, writeIfChanged } from './data-file.js';
 
 const SOURCE =
   'https://services.arcgis.com/yzB9WM8W0BO3Ql7d/ArcGIS/rest/services/POELocations/FeatureServer/0/query' +
@@ -28,11 +28,23 @@ export function groupStations(features) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// A refresh must not silently drop stations: their ids key the saved status history.
+export function removedStations(previous, next) {
+  const kept = new Set(next.map((s) => s.id));
+  return (previous?.stations ?? []).map((s) => s.id).filter((id) => !kept.has(id));
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const res = await fetch(SOURCE);
   if (!res.ok) throw new Error(`CDOT service returned ${res.status}`);
   const { features } = await res.json();
   const stations = groupStations(features);
-  await writeFile(OUT, JSON.stringify({ source: SOURCE, fetchedAt: new Date().toISOString(), stations }, null, 2) + '\n');
-  console.log(`Wrote ${stations.length} stations (${features.length} locations)`);
+  if (!stations.length) throw new Error('CDOT returned no stations; refusing to overwrite data/stations.json');
+  const previous = await readPrevious(OUT);
+  const removed = removedStations(previous, stations);
+  if (removed.length && process.env.FORCE !== '1') {
+    throw new Error(`CDOT's layer no longer lists: ${removed.join(', ')}. Review, then re-run with FORCE=1 if that's right.`);
+  }
+  const changed = await writeIfChanged(OUT, previous, { source: SOURCE, fetchedAt: new Date().toISOString(), stations }, 2);
+  console.log(changed ? `Updated ${stations.length} stations (${features.length} locations)` : 'Stations: no changes');
 }

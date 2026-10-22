@@ -84,6 +84,14 @@ bash scripts/install-nginx-site.sh   # sudo: copies the site into sites-availabl
 
 It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open **http://192.168.0.20:8080** (the server's wired address; the Wi-Fi address `192.168.0.91` works too). Both come from DHCP and can change, so a reservation in your router keeps them stable. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`).
 
+## Data refresh
+
+`.github/workflows/refresh-data.yml` runs **every Monday at 06:17 UTC** (and on demand from the Actions tab, or with `gh workflow run refresh-data.yml`). It re-fetches CDOT's port locations and FMCSA's inspection data, runs the tests, and, only if the data actually changed (the fetch timestamp alone doesn't count), commits it to `main` as `github-actions[bot]` and dispatches the normal test → publish → deploy pipeline. A run with no changes ends quietly. Each run's summary shows what changed.
+
+The sync scripts refuse to overwrite the data (the job fails, and you get GitHub's failure email) if CDOT returns no stations, if a station disappears (its id keys the saved status history), or if FMCSA returns more than 20% fewer inspections than before. After reviewing, override with `FORCE=1 npm run sync` / `FORCE=1 npm run sync:inspections`, then commit.
+
+To change the schedule, edit the `cron` line. Bot commits go straight to `main`; if you later add branch protection, allow the Actions bot to bypass it or change the job to open a pull request.
+
 ## Security
 
 - **Token check** is constant-time. After 10 failed attempts within a minute a client gets `429` (with `Retry-After`) and its token isn't checked again until the window passes.

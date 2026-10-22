@@ -74,6 +74,24 @@ Optional variable `DEPLOY_PORT_MAPPING` (default `127.0.0.1:3000:3000`, for a re
 
 Notes: the runner executes this repository's workflow code on the server, so keep the repo private and only let trusted people push to it. Only the `deploy` job uses the runner; tests and the image build stay on GitHub-hosted machines, and pull requests never deploy.
 
+### Reverse proxy (nginx)
+
+The container only listens on `127.0.0.1:3000`. `deploy/nginx-cdot-stations.conf` makes the machine's existing nginx forward LAN port **8080** to it (plain HTTP, for a trusted home network; the write token is visible to anyone sniffing that network). Install it once:
+
+```bash
+bash scripts/install-nginx-site.sh   # sudo: copies the site into sites-available, enables it, runs nginx -t, reloads
+```
+
+It leaves the existing port-80 default site alone and removes the new site again if `nginx -t` fails. Then open `http://<server LAN IP>:8080`. If another device can't connect, check the firewall (`sudo ufw allow 8080/tcp`), and consider a DHCP reservation in your router so the server's address doesn't change.
+
+## Security
+
+- **Token check** is constant-time. After 10 failed attempts within a minute a client gets `429` (with `Retry-After`) and its token isn't checked again until the window passes.
+- **Client identity** for that lockout is the connection address, or the proxy's `X-Real-IP` when `TRUST_PROXY=1`. The deploy script sets it only when the container is published on `127.0.0.1`, where only the local reverse proxy can reach it. Don't set it if the app is directly reachable, or callers can spoof the header. Behind a tunnel such as Cloudflare, have the proxy pass the real visitor address (e.g. `CF-Connecting-IP`) as `X-Real-IP`, otherwise every visitor shares one lockout.
+- **Headers:** every response has a Content-Security-Policy (scripts and styles only from this origin and unpkg, map tiles only from OpenStreetMap, no framing), `nosniff`, a referrer policy, and a permissions policy; API responses are `no-store`.
+- **Third-party assets:** Leaflet loads from unpkg pinned to an exact version with Subresource Integrity hashes, so a tampered CDN file won't run. When bumping Leaflet, update the version and both hashes in `public/index.html`; `npm test` fails if a hash or version pin is missing.
+- **Not handled in the app:** HTTPS and HSTS (add `Strict-Transport-Security` at the proxy once it serves HTTPS) and request rate limiting for non-failed traffic (use nginx `limit_req`).
+
 ## Importing status
 
 There is no official CSP/CDOT open/closed feed (checked CSP's Port of Entry page and COtrip, whose ports-of-entry map layer sits behind an undocumented API), so imports come from adapters you point at a source. Imported entries are tagged with their source and shown as "via <source>" in the UI.

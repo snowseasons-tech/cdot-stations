@@ -10,9 +10,13 @@ PORTS=${2:-127.0.0.1:3000:3000}
 NAME=cdot-stations
 ENV_FILE=$HOME/cdot-stations/env
 
+# Only trust the proxy's X-Real-IP (used to throttle failed token attempts per client) when the port is
+# published on localhost, i.e. when only the reverse proxy on this machine can reach the container.
+case "$PORTS" in 127.0.0.1:*) TRUST_PROXY=1 ;; *) TRUST_PROXY=0 ;; esac
+
 run() {
   docker run -d --name "$NAME" --restart unless-stopped \
-    -p "$PORTS" --env-file "$ENV_FILE" -v cdot-data:/var/lib/cdot "$1" >/dev/null
+    -p "$PORTS" --env-file "$ENV_FILE" -e "TRUST_PROXY=$TRUST_PROXY" -v cdot-data:/var/lib/cdot "$1" >/dev/null
 }
 
 healthy() {

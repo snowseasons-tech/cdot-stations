@@ -5,12 +5,33 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
 import { importStatuses } from './importer.js';
 import { summarize } from './inspections.js';
+import { FailureLimiter, tokenMatches } from './auth.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
+
+// Served on every response. HSTS is deliberately not here: add it at the HTTPS-terminating proxy.
+const SECURITY_HEADERS = {
+  'content-security-policy': [
+    "default-src 'none'",
+    "script-src 'self' https://unpkg.com",
+    "style-src 'self' https://unpkg.com",
+    "style-src-attr 'unsafe-inline'", // Leaflet and the map pins set inline style attributes
+    "img-src 'self' data: https://tile.openstreetmap.org https://unpkg.com",
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; '),
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin', // OpenStreetMap's tile servers require a Referer
+  'permissions-policy': 'geolocation=(), camera=(), microphone=(), payment=()',
+  'cross-origin-opener-policy': 'same-origin',
+};
+
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
-export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN } = {}) {
+export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'), inspectionsFile = join(ROOT, 'data/inspections.json'), statusFile = process.env.STATUS_FILE ?? join(ROOT, 'data/status.json'), token = process.env.STATUS_TOKEN, trustProxy = process.env.TRUST_PROXY === '1', limiter = new FailureLimiter() } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
   const store = new Store(statusFile);
@@ -19,11 +40,29 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
   const view = (s) => ({ ...s, ...store.get(s.id), inspections: summarize(inspections, s.id) });
 
   const json = (res, code, body) => {
-    res.writeHead(code, { 'content-type': 'application/json' });
+    res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify(body));
   };
 
-  const authorized = (req) => !token || req.headers.authorization === `Bearer ${token}`;
+  // Behind a reverse proxy every connection comes from the proxy, so the client is taken from X-Real-IP,
+  // but only when TRUST_PROXY=1 (otherwise a caller could spoof it to dodge the lockout).
+  const clientOf = (req) => (trustProxy && req.headers['x-real-ip']) || req.socket.remoteAddress || 'unknown';
+
+  // Returns true if the caller may write; otherwise sends the 401/429 and returns false.
+  const authorize = (req, res) => {
+    if (!token) return true;
+    const client = clientOf(req);
+    const wait = limiter.retryAfter(client);
+    if (wait) {
+      res.setHeader('retry-after', wait);
+      json(res, 429, { error: 'too many failed attempts; try again later' });
+      return false;
+    }
+    if (tokenMatches(req.headers.authorization, token)) return true;
+    limiter.fail(client);
+    json(res, 401, { error: 'unauthorized' });
+    return false;
+  };
 
   const readBody = async (req, limit = 10_000) => {
     let size = 0;
@@ -36,6 +75,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
   };
 
   return createServer(async (req, res) => {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     try {
       const { pathname } = new URL(req.url, 'http://x');
       const m = pathname.match(/^\/api\/stations(?:\/([a-z0-9-]+)(\/history|\/status|\/inspections)?)?$/);
@@ -52,7 +92,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
           return json(res, 200, summarize(inspections, s.id, months));
         }
         if (req.method === 'PUT' && m[2] === '/status') {
-          if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
+          if (!authorize(req, res)) return;
           if (s.planned) return json(res, 409, { error: 'station is not open yet' });
           const { status, note } = await readBody(req);
           return json(res, 200, await store.set(s.id, { status, note }));
@@ -63,7 +103,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
 
       if (pathname === '/api/import') {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
-        if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
+        if (!authorize(req, res)) return;
         const { source, records } = await readBody(req, 500_000);
         if (!/^[a-z0-9_-]{1,40}$/i.test(source ?? '')) return json(res, 400, { error: 'source must be 1-40 letters, digits, - or _' });
         if (!Array.isArray(records) || records.length > 500) return json(res, 400, { error: 'records must be an array of up to 500 items' });

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- iPhone: opens full screen from the home screen, status bar over the dark header (safe-area padding below).
+       format-detection stops iOS turning parcel IDs and scores into phone links; real tel: links still work. -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Truck Inspections" />
+  <meta name="theme-color" content="#020617" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <meta name="robots" content="noindex" />
+  <title>Truck Inspections | Colorado Ports of Entry</title>
+  <!-- Colorado truck inspection portal: a React app built from tools/inspections (npm run build -> inspections.js and
+       inspections.css). Port and inspection data come from data/ at build time; live port status from /api/stations. -->
+  <link rel="stylesheet" href="/inspections.css" />
+</head>
+<body class="bg-slate-950 antialiased">
+  <div id="backBar" class="bg-slate-900 border-b border-slate-800 px-4 py-1.5 text-xs">
+    <a href="/" class="text-lime-300 hover:underline">← Back to the stations tracker</a>
+  </div>
+  <div id="root"></div>
+  <script src="/inspections.js"></script>
+</body>
+</html>

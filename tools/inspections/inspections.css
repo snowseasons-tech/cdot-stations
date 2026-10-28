@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* iPhone: no grey tap flash, no text inflation in landscape. With viewport-fit=cover the page is padded by the
+   safe-area insets (0 on desktop): a solid strip under the home-screen app's status bar, which the sticky header
+   sticks below, room for the notch in landscape and for the home indicator. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+body { padding-top: env(safe-area-inset-top); }
+body::before { content: ""; position: fixed; z-index: 1001; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: #020617; }
+#root header { top: env(safe-area-inset-top); }
+#backBar, #root header, #root main { padding-left: max(1rem, env(safe-area-inset-left)); padding-right: max(1rem, env(safe-area-inset-right)); }
+#root main { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+/* ~44px touch targets for the tabs, "Mark a spot" and closing the pin form */
+@media (max-width: 767px) {
+  #root header button { min-height: 2.75rem; }
+  #root input, #root select, #root textarea { font-size: 16px; } /* iOS zooms the page into smaller fields */
+  #root form button[aria-label="Cancel"] { min-width: 2.75rem; min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: center; }
+}

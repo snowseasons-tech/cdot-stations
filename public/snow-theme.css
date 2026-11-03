@@ -1,0 +1,14 @@
+:root {
+  --sst-paper: #f4f8fc;
+  --sst-ink: #142742;
+  --sst-muted: #4c6179;
+  --sst-line: #dce6ef;
+  --sst-navy: #101e39;
+  --sst-deep-blue: #154f77;
+  --sst-blue: #1463a0;
+  --sst-frost: #e5f4ff;
+  --sst-ice: #9bdcfc;
+  --sst-focus: #2781c3;
+  --sst-radius: 14px;
+  --sst-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}

@@ -482,6 +482,18 @@ Two independent layers, both delivered as GitHub issues in the backup repo (GitH
 - **Failure** (`backup-failed` issue): if a run fails, `backup-run.sh` opens an issue with the last output, or comments on the one already open. The next successful run comments "Recovered" and closes every open one. This is best-effort: if GitHub or `gh` is the thing that's broken, the alert can't be sent, which is why the second layer exists.
 - **Missing** (`backup-missing` issue): a scheduled workflow in the backup repo runs daily at 12:00 UTC and opens an issue if `heartbeat.txt` is more than 30 hours old, i.e. a daily run was missed (server off or offline, cron stopped, or failures that couldn't report themselves). It closes the issue when a heartbeat returns. Before the first heartbeat there is a 72-hour grace period. Its source is in `deploy/backup-repo/` (copied to the backup repo).
 
+**Site availability (`site-down` issue):** `scripts/site-health-check.sh` probes `/api/stations` every five minutes, verifies that the response contains a `stations` array, and opens or updates one issue in the same backup repo if the app is unavailable. After the endpoint recovers, it comments on and closes the issue. The alert is independent of the daily backup heartbeat, so it can report an outage sooner. It uses the server's existing `gh` login and does not need an API token in the app.
+
+Install the idempotent cron entry on the server from this checkout:
+
+```bash
+bash scripts/install-health-check-cron.sh
+# Optional: use a different interval and app URL
+bash scripts/install-health-check-cron.sh "*/5 * * * *" "http://127.0.0.1:8080"
+```
+
+The log is `~/cdot-stations/site-health.log`. Confirm the entry with `crontab -l` and check the log after five minutes. The installer accepts a schedule and URL as its first and second arguments. Issue delivery depends on `gh` being authenticated on the server with permission to create and close issues in the backup repo; if GitHub is unavailable, the health result is still logged and the script returns the API check's exit status.
+
 Set `ALERT_REPO=""` to switch off failure alerts. Tests: `npm test` covers the alert logic with a fake `gh`; `test/e2e/backup.sh` covers the heartbeat against a real container.
 
 To restore (it saves the current data first as `pre-restore-<time>.json`, replaces `status.json`, and restarts the container, since the app only reads it at startup):

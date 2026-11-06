@@ -10,7 +10,7 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 
 **Stations and map**
 - Map and list of Colorado's 10 commercial vehicle inspection stations (CSP/CDOT ports of entry) with highway, mileposts, travel directions and phone numbers, taken from CDOT's public ports-of-entry layer. Platteville is shown as a planned site.
-- Open / closed / unknown status per station with an optional note, the time of the update and its source, plus a history of the last 1000 changes. Updated from the page ("Update status") or the API.
+- Open / closed / unknown status per station with an optional note, the time of the update and its source, plus a history of the last 1000 changes, shown on the station page. Updated from the page ("Update status") or the API.
 - `npm run sync` to refresh the station list from CDOT.
 
 **Status import**
@@ -22,8 +22,12 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - Search of individual inspections (place or carrier, date range, inspection level I–V, out-of-service result, carrier state, paged, newest first) from a dialog in the tracker, answered live from FMCSA's Vehicle Inspection File with nothing stored, a 10-minute cache and a rate limit. Available at `GET /api/inspection-search`. **Download all as CSV** and **Download all as MySQL (.sql)** export every match (up to 10,000) through `GET /api/inspection-search.csv` and `.sql` (the .sql file creates the table and loads with `REPLACE INTO`, so it can be reloaded safely), with spreadsheet formulas in carrier text defused and its own rate limit.
 - Map layer showing where Level I–V inspections happened, as circles sized by count, filterable by inspection level and by period (last 12 months or all). FMCSA records carry no coordinates, so each is placed at its port (for port and fixed-facility records) or at the centroid of its town (Census gazetteer); about 4% can't be placed, and the page shows what share was. Available at `GET /api/inspection-locations`, and refreshed with the weekly data refresh.
 
+**Site availability**
+- Five-minute health check of the running API (`scripts/site-health-check.sh`, installed by `scripts/install-health-check-cron.sh`). It opens one `site-down` GitHub issue when the API stops responding or returns an unexpected response, and closes it when the API recovers.
+
 **Deployment and operations**
 - Docker image, built and published to GitHub Container Registry by GitHub Actions on every push to `main` after the tests pass. The image is booted and checked (home page, API, token enforcement) before it is published.
+- Browser check before publishing: after the image smoke test, the app is loaded in headless Chromium (Playwright) and the build fails if the station list or map pins do not appear, or the console logs an error, including a Content-Security-Policy block (`test/e2e/browser.mjs`).
 - Automatic deploy to the home server through a self-hosted runner: health-checked, with automatic rollback to the previous image if the new one doesn't come up healthy.
 - nginx site (`deploy/nginx-cdot-stations.conf`) forwarding LAN port 8080 to the app.
 - Weekly data refresh workflow: re-fetches CDOT and FMCSA data (including the inspection locations) and, only when it changed, commits it and triggers a deploy. The sync scripts refuse empty results, dropped stations, or more than 20% fewer inspections.

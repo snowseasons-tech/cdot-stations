@@ -126,3 +126,11 @@ dialog input, dialog select, dialog textarea { min-height: 44px; font-size: 16px
   dialog .dates label { min-width: 120px; }
 }
 @media (prefers-reduced-motion: reduce) { .card { transition: none; } }
+/* Station status history */
+.history-list { list-style:none; display:flex; flex-direction:column; gap:8px; max-height:min(58vh,520px); overflow:auto; margin:12px 0; padding:0; }
+.history-entry { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+.history-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.history-heading time { color:var(--muted); font-size:.78rem; text-align:right; }
+.history-note { margin:6px 0 0; overflow-wrap:anywhere; }
+#history { width:min(92vw,520px); max-height:90vh; overflow:auto; }
+#history h2 { margin:6px 0; font-size:1.05rem; }

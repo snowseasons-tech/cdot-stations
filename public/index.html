@@ -101,6 +101,11 @@
     <p class="sub">North American Standard inspections at the fixed port, from FMCSA's public Vehicle Inspection File. Roadside patrol stops in the same town are excluded. Vehicle OOS rate is the share of vehicle inspections (Levels I, II, V) with a vehicle out-of-service violation; driver OOS rate likewise over driver inspections (Levels I, II, III).</p>
     <menu><button id="insp-close">Close</button></menu>
   </dialog>
+  <dialog id="history" aria-labelledby="history-title">
+    <h2 id="history-title"></h2>
+    <ol id="history-list" class="history-list" aria-live="polite"></ol>
+    <menu><button id="history-close" type="button">Close</button></menu>
+  </dialog>
   <dialog id="search" class="wide">
     <h2>Search inspections</h2>
     <form id="search-form">
@@ -137,6 +142,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="links.js"></script>
   <script src="app.js"></script>
+  <script src="history.js"></script>
   <script src="search.js"></script>
   <script src="install.js"></script>
   <script src="follow.js"></script>

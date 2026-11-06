@@ -789,6 +789,14 @@ See [CHANGELOG.md](CHANGELOG.md). Add an entry under *Unreleased* when you chang
 
 Proposals, not commitments, in rough order of value and urgency. Each says where it came from so it can be re-judged. When one ships, move it to [CHANGELOG.md](CHANGELOG.md) and delete it here.
 
+### MVP access decision
+
+**Decided: keep the shared write token behind Cloudflare Access (option A).** The team signs in to the site by email through Access, and every save also needs the shared token (`STATUS_TOKEN`). Per-person attribution and per-person logins are not part of the MVP; they are revisited if the team grows or a change needs to be traced to a person.
+
+- **Phone status updates are in MVP scope.** They use the same shared token, which the person enters on the phone, and the same Access sign-in.
+- **Known limit:** one token is shared by everyone. An edit records the token, not a name. A leaked token means rotating it and having each phone enter the new one.
+- **Revisit when:** the team grows beyond a handful of people, or a change needs to be traced to a person (then option B, the Access identity, comes first, before per-person logins).
+
 ### Before it goes public
 
 From the Security checklist; these are required, not optional, before exposing the app to the internet.

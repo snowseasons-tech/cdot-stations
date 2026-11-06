@@ -304,23 +304,24 @@ export default function App() {
   const inputCls = 'w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 outline-none focus:border-cyan-500';
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
+    <div className="inspection-workspace min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col">
       <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur-md sticky top-0 z-[1000] px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xl">
         <div className="flex items-center gap-3 min-w-0">
           <div className="bg-gradient-to-tr from-cyan-600 to-blue-600 p-2.5 rounded-xl shrink-0">
             <Truck className="w-6 h-6 text-white" />
           </div>
           <div className="min-w-0">
+            <p className="workspace-brand">SNOW SEASONS TECH / COLORADO</p>
             <h1 className="text-lg font-bold tracking-tight text-slate-100">Colorado Truck Inspections</h1>
             <p className="text-xs text-slate-400">Ports of entry and FMCSA roadside inspections · data through {monthLabel(THROUGH, true)}</p>
           </div>
         </div>
 
-        <nav className="order-last w-full md:order-none md:w-auto flex items-center gap-1 overflow-x-auto bg-slate-950/80 p-1 rounded-lg border border-slate-800">
+        <nav aria-label="Inspection workspace" className="order-last w-full md:order-none md:w-auto flex items-center gap-1 overflow-x-auto bg-slate-950/80 p-1 rounded-lg border border-slate-800">
           {tabs.map(tab => {
             const Icon = tab.icon;
             return (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              <button key={tab.id} aria-current={activeTab === tab.id ? "page" : undefined} onClick={() => setActiveTab(tab.id)}
                 className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
                   activeTab === tab.id ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}>
@@ -341,17 +342,30 @@ export default function App() {
         </button>
       </header>
 
-      <main className="flex-1 p-4 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-4 content-start">
+      <main id="workspace" className="flex-1 p-4 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-4 content-start">
+
+        <section className="workspace-overview lg:col-span-12" aria-label="Workspace overview">
+          <div>
+            <p className="workspace-eyebrow">INSPECTION WORKSPACE</p>
+            <h2>{({ map: 'Explore Colorado', ports: 'Ports of entry', trends: 'Inspection trends', spotted: 'Spotted inspections', logger: 'Your inspection log', guide: 'Inspection levels explained' })[activeTab]}</h2>
+            <p>Explore inspection history and reported station status across Colorado.</p>
+          </div>
+          <dl className="workspace-metrics">
+            <div><dt>Ports of entry</dt><dd>{PORTS.length}</dd></div>
+            <div><dt>Towns on file</dt><dd>{fmt(TOWNS.length)}</dd></div>
+            <div><dt>Data through</dt><dd>{monthLabel(THROUGH, true)}</dd></div>
+          </dl>
+        </section>
 
         {activeTab === 'map' && (
           <>
             {/* Shorter on phones: a one-finger drag on the map pans it, so leave page around it to scroll by. */}
             <div className="lg:col-span-8 flex flex-col gap-3 h-[440px] sm:h-[560px] lg:h-[680px] min-w-0">
               <div className="flex flex-wrap items-center gap-2 bg-slate-900/80 p-2.5 rounded-xl border border-slate-800 text-xs">
-                <input type="search" placeholder="Search a town, port or highway" value={searchQuery}
+                <input aria-label="Search a town, port or highway" type="search" placeholder="Search a town, port or highway" value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1 min-w-[10rem] bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-500" />
-                <select value={show} onChange={(e) => setShow(e.target.value)} className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-300 outline-none">
+                <select aria-label="Map locations" value={show} onChange={(e) => setShow(e.target.value)} className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-300 outline-none">
                   <option value="both">Ports and towns</option>
                   <option value="ports">Ports only</option>
                   <option value="towns">Towns only</option>

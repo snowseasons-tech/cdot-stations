@@ -17,3 +17,41 @@ body::before { content: ""; position: fixed; z-index: 1001; top: 0; left: 0; rig
   #root input, #root select, #root textarea { font-size: 16px; } /* iOS zooms the page into smaller fields */
   #root form button[aria-label="Cancel"] { min-width: 2.75rem; min-height: 2.75rem; display: inline-flex; align-items: center; justify-content: center; }
 }
+
+/* Workspace design: a quiet navy canvas with cyan reserved for navigation and data. */
+body { background: #080f1c; }
+.inspection-workspace { background: radial-gradient(ellipse at 80% 0%, #13304766, transparent 48%), #080f1c; }
+#backBar { background: #080f1c; padding-block: .65rem; border-color: #233247; }
+#backBar a { color: #b3c4d7; }
+#root header { background: #0d1829f5; box-shadow: 0 8px 32px #0002; padding-block: 1rem; }
+.workspace-brand, .workspace-eyebrow { color: #79b8ca; font-size: .625rem; letter-spacing: .18em; font-weight: 700; margin-bottom: .3rem; }
+#root header h1 { font-size: 1.15rem; }
+#root header nav { border-radius: 12px; padding: 5px; }
+#root header nav button { min-height: 38px; padding-inline: 14px; }
+#root header nav button[aria-current="page"] { background: #a5ecdd; color: #102c30; box-shadow: none; }
+#root header > button { min-height: 40px; background: #163c4d; border: 1px solid #3e7d8c; box-shadow: none; color: #d2f5f4; }
+#root header > button:hover { background: #215366; }
+#root main { max-width: 1480px; padding-top: 1.75rem; gap: 1.25rem; }
+.workspace-overview { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: .25rem 0 1rem; }
+.workspace-overview h2 { font-size: clamp(1.7rem, 3vw, 2.3rem); line-height: 1.15; font-weight: 650; letter-spacing: -.04em; color: #eff7ff; }
+.workspace-overview > div > p:last-child { color: #a3b4c8; margin-top: .65rem; font-size: .85rem; max-width: 34rem; }
+.workspace-metrics { display: flex; gap: 2rem; flex-shrink: 0; }
+.workspace-metrics > div { padding-left: 1.25rem; border-left: 1px solid #304158; }
+.workspace-metrics dt { font-size: .65rem; color: #a3b4c8; margin-bottom: .5rem; }
+.workspace-metrics dd { font-size: 1.25rem; font-weight: 600; letter-spacing: -.025em; font-variant-numeric: tabular-nums; }
+#root main input, #root main select, #root main textarea { min-height: 40px; border-radius: 8px; }
+#root main aside > div { padding: 1.25rem; border-color: #293b50; box-shadow: 0 8px 24px #0001; }
+#root main aside ol button { min-height: 38px; }
+#root .text-slate-500 { color: #91a3bb; }
+#root :where(button, a, input, select, textarea):focus-visible { outline: 2px solid #a5ecdd; outline-offset: 3px; }
+@media (min-width: 1024px) { #root header { padding-inline: 2rem; } #root main { padding-inline: 2rem; } }
+@media (max-width: 767px) {
+  .workspace-overview { align-items: stretch; flex-direction: column; gap: 1.25rem; }
+  .workspace-metrics { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: .75rem; }
+  .workspace-metrics > div { padding-left: .65rem; }
+  .workspace-metrics dd { font-size: 1rem; }
+  #root header h1 { font-size: 1rem; }
+  #root header nav button { min-height: 44px; }
+  #root main { padding-top: 1.25rem; }
+}
+@media (prefers-reduced-motion: reduce) { #root *, #root *::before, #root *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

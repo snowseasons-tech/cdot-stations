@@ -54,3 +54,6 @@ check "selling is off without Stripe settings (page)" 404 "$B/join"
 check "selling is off without Stripe settings (webhook)" 404 -X POST -d '{}' "$B/api/stripe-webhook"
 check "member list needs the token" 401 "$B/api/members"
 check "member list works with the token" 200 -H 'authorization: Bearer smoke-test-token' "$B/api/members"
+
+# Opens the page in headless Chromium (CI sets BROWSER_CHECK=1 after installing Playwright; see test/e2e/browser.mjs).
+if [ -n "${BROWSER_CHECK:-}" ]; then node test/e2e/browser.mjs "$B"; fi

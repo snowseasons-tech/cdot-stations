@@ -748,11 +748,11 @@ export default function App() {
 
     if (apiLang === 'curl') {
       if (apiMethod === 'GET') {
-        return `curl -X GET "${fullUrl}" \\\n  -H "Authorization: Bearer cdot_token_2026_demo" \\\n  -H "Accept: application/json"`;
+        return `curl -X GET "${fullUrl}" \\\n  -H "Authorization: Bearer YOUR_API_TOKEN" \\\n  -H "Accept: application/json"`;
       } else if (apiMethod === 'POST') {
-        return `curl -X POST "${fullUrl}" \\\n  -H "Authorization: Bearer cdot_token_2026_demo" \\\n  -H "Content-Type: application/json" \\\n  -d '${apiPayload.replace(/\n/g, '')}'`;
+        return `curl -X POST "${fullUrl}" \\\n  -H "Authorization: Bearer YOUR_API_TOKEN" \\\n  -H "Content-Type: application/json" \\\n  -d '${apiPayload.replace(/\n/g, '')}'`;
       } else {
-        return `curl -X DELETE "${fullUrl}/USER-PIN-801" \\\n  -H "Authorization: Bearer cdot_token_2026_demo"`;
+        return `curl -X DELETE "${fullUrl}/USER-PIN-801" \\\n  -H "Authorization: Bearer YOUR_API_TOKEN"`;
       }
     } else if (apiLang === 'js') {
       if (apiMethod === 'GET') {
@@ -760,7 +760,7 @@ export default function App() {
 fetch("${fullUrl}", {
   method: "GET",
   headers: {
-    "Authorization": "Bearer cdot_token_2026_demo",
+    "Authorization": "Bearer YOUR_API_TOKEN",
     "Accept": "application/json"
   }
 })
@@ -772,7 +772,7 @@ fetch("${fullUrl}", {
 fetch("${fullUrl}", {
   method: "POST",
   headers: {
-    "Authorization": "Bearer cdot_token_2026_demo",
+    "Authorization": "Bearer YOUR_API_TOKEN",
     "Content-Type": "application/json"
   },
   body: JSON.stringify(${apiPayload})
@@ -783,7 +783,7 @@ fetch("${fullUrl}", {
         return `// JavaScript Fetch DELETE
 fetch("${fullUrl}/USER-PIN-801", {
   method: "DELETE",
-  headers: { "Authorization": "Bearer cdot_token_2026_demo" }
+  headers: { "Authorization": "Bearer YOUR_API_TOKEN" }
 })
 .then(res => res.json())
 .then(data => console.log("Deleted:", data));`;
@@ -795,7 +795,7 @@ import requests
 
 url = "${fullUrl}"
 headers = {
-    "Authorization": "Bearer cdot_token_2026_demo",
+    "Authorization": "Bearer YOUR_API_TOKEN",
     "Accept": "application/json"
 }
 
@@ -808,7 +808,7 @@ import requests
 
 url = "${fullUrl}"
 headers = {
-    "Authorization": "Bearer cdot_token_2026_demo",
+    "Authorization": "Bearer YOUR_API_TOKEN",
     "Content-Type": "application/json"
 }
 payload = ${apiPayload}
@@ -820,7 +820,7 @@ print("Created Pin Data:", response.json())`;
 import requests
 
 url = "${fullUrl}/USER-PIN-801"
-headers = {"Authorization": "Bearer cdot_token_2026_demo"}
+headers = {"Authorization": "Bearer YOUR_API_TOKEN"}
 
 response = requests.delete(url, headers=headers)
 print("Response:", response.json())`;

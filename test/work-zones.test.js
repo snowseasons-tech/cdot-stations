@@ -35,6 +35,25 @@ test('the feed is turned into one placed zone per location, with its roads and t
   assert.equal(out.fetchedAt, '2026-11-06T12:00:00.000Z');
 });
 
+test('a feed with camelCase keys gives the same zones as the snake_case one', () => {
+  const camel = JSON.parse(JSON.stringify(sample).replace(/core_details/g, 'coreDetails').replace(/road_names/g, 'roadNames')
+    .replace(/event_type/g, 'eventType').replace(/start_date/g, 'startDate').replace(/end_date/g, 'endDate').replace(/event_status/g, 'eventStatus')
+    .replace(/road_event_id/g, 'roadEventId'));
+  assert.deepEqual(normalizeFeed(camel, 'x').zones, normalizeFeed(sample, 'x').zones);
+});
+
+test('incidents are left out of the published zones and counted', () => {
+  const feed = { type: 'FeatureCollection', features: [
+    { id: 'i', type: 'Feature', geometry: { type: 'Point', coordinates: [-105.2, 39.7] },
+      properties: { core_details: { event_type: 'incident', road_names: ['I-25'] } } },
+    ...sample.features.slice(0, 1),
+  ] };
+  const out = normalizeFeed(feed, 'x');
+  assert.equal(out.zones.length, 1);
+  assert.equal(out.skippedNonWorkZones, 1);
+  assert.equal(out.zones[0].id, 'RE-1');
+});
+
 test('a document that is not a WZDx feed is refused', () => {
   assert.throws(() => normalizeFeed({ hello: 'world' }, 'x'), /not a WZDx FeatureCollection/);
   assert.throws(() => normalizeFeed(null, 'x'), /not a WZDx FeatureCollection/);

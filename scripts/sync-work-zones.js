@@ -10,6 +10,14 @@ export const OUT = new URL('../data/work-zones.json', import.meta.url);
 const MAX_ZONES = 5000;
 const TIMEOUT_MS = 20000;
 
+// Some publishers serialise WZDx keys as camelCase (coreDetails, eventType). Their feeds are still WZDx, so the
+// keys are converted to snake_case first. This follows streetworks (the MIT Python SDK for WZDx), which does the same.
+const snakeKey = (key) => key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+export function snakeKeys(object) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) return object;
+  return Object.fromEntries(Object.entries(object).map(([k, v]) => [snakeKey(k), v]));
+}
+
 // The middle of a zone's geometry: the average of its points (one point for a Point, all of them for a line).
 function centre(geometry) {
   if (!geometry) return null;
@@ -31,11 +39,14 @@ export function normalizeFeed(feed, fetchedAt) {
     throw new Error('the feed is not a WZDx FeatureCollection');
   }
   const zones = [];
+  let incidents = 0;
   for (const f of feed.features) {
     const where = centre(f.geometry);
     if (!where) continue;   // a zone without a usable location cannot be placed on the page
-    const p = f.properties || {};
-    const core = p.core_details || {};
+    const p = snakeKeys(f.properties) || {};
+    const core = snakeKeys(p.core_details) || {};
+    // Only work zones are published. A WZDx feed can also carry incidents and other road events.
+    if (core.event_type !== 'work-zone') { incidents++; continue; }
     zones.push({
       id: String(p.road_event_id ?? f.id ?? zones.length),
       lat: where.lat,
@@ -50,7 +61,7 @@ export function normalizeFeed(feed, fetchedAt) {
     });
   }
   if (zones.length > MAX_ZONES) throw new Error(`the feed has more than ${MAX_ZONES} zones; refusing to publish it`);
-  return { source: 'CDOT work zone feed (WZDx, via COtrip)', fetchedAt, zones };
+  return { source: 'CDOT work zone feed (WZDx, via COtrip)', fetchedAt, zones, skippedNonWorkZones: incidents };
 }
 
 // Runs the sync. Returns what happened, so the tests and the CLI can report it without the URL.

@@ -45,6 +45,27 @@
     return stations.filter((station) => station.status === 'closed' && !station.planned && (station.locations ?? []).some((loc) =>
       samples.some((point) => haversine(point, [loc.lat, loc.lng]) <= 2500)));
   }
+  function googleDirectionsUrl(route) {
+    const url = new URL('https://www.google.com/maps/dir/');
+    url.searchParams.set('api', '1');
+    url.searchParams.set('origin', $('trip-from').value.trim());
+    url.searchParams.set('destination', $('trip-to').value.trim());
+    url.searchParams.set('travelmode', 'driving');
+
+    // Keep at most three interior points so the selected route can be handed off on mobile too.
+    const interior = route.geometry.coordinates.slice(1, -1);
+    const count = Math.min(3, interior.length);
+    if (count) {
+      const points = Array.from({ length: count }, (_, i) => {
+        const index = count === 1 ? 0 : Math.round(i * (interior.length - 1) / (count - 1));
+        const [lng, lat] = interior[index];
+        return lat.toFixed(5) + ',' + lng.toFixed(5);
+      });
+      url.searchParams.set('waypoints', points.join('|'));
+    }
+    return url.toString();
+  }
+
   function draw() {
     layer.clearLayers();
     results.replaceChildren();
@@ -74,9 +95,12 @@
     if (routes[selected]) map.fitBounds(routes[selected].bounds, { padding: [24, 24] });
     if (routes.length) {
       const nav = document.createElement('a');
-      nav.href = 'https://www.google.com/maps/dir/?api=1&origin=' + encodeURIComponent($('trip-from').value.trim()) + '&destination=' + encodeURIComponent($('trip-to').value.trim()) + '&travelmode=driving';
-      nav.target = '_blank'; nav.rel = 'noopener noreferrer'; nav.className = 'button-link'; nav.textContent = 'Open directions in Google Maps ↗';
-      results.append(nav);
+      nav.href = googleDirectionsUrl(routes[selected]);
+      nav.target = '_blank'; nav.rel = 'noopener noreferrer'; nav.className = 'button-link'; nav.textContent = 'Open selected route in Google Maps ↗';
+      const navNote = document.createElement('span');
+      navNote.className = 'route-meta';
+      navNote.textContent = 'Google Maps will recalculate through up to three points on this route; the exact roads may differ.';
+      results.append(nav, navNote);
     }
   }
   async function refreshStationReports() {

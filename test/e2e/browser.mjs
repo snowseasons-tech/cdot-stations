@@ -42,6 +42,26 @@ try {
   const mapBox = await page.locator('#map').boundingBox();
   if (!mapBox || mapBox.width < 100 || mapBox.height < 100) problems.push(`map is not visible (${JSON.stringify(mapBox)})`);
 
+  // Saving a status: an expired sign-in comes back as a redirect to the sign-in page, and a missing token as a 401.
+  // Both must tell the person what to do in the editor, not fail silently.
+  const saveError = async (status, headers = {}) => {
+    await page.route('**/api/stations/*/status', (route) => route.fulfill({ status, headers }));
+    await page.locator('#list .card .update-btn').first().click();
+    await page.locator('#f-save').click();
+    await page.waitForFunction(() => document.getElementById('f-error').textContent !== '', null, { timeout: 5000 });
+    const message = await page.locator('#f-error').textContent();
+    await page.unroute('**/api/stations/*/status');
+    await page.locator('#editor button[value="cancel"]').click();
+    return message;
+  };
+  // The browser logs the rejected save as a failed resource; that is the expected outcome here, so drop it.
+  const before = problems.length;
+  const expired = await saveError(302, { location: '/sign-in' });
+  const needsToken = await saveError(401);
+  problems.length = before;
+  if (!/sign-in has expired/.test(expired)) problems.push(`expired sign-in message missing (got "${expired}")`);
+  if (!/Write token required/.test(needsToken)) problems.push(`write-token message missing (got "${needsToken}")`);
+
   if (problems.length) {
     console.error('Browser check FAILED:');
     for (const p of problems) console.error(`  - ${p}`);

@@ -3,10 +3,13 @@
   const form = $('trip-form');
   const results = $('trip-results');
   const status = $('trip-status');
-  if (!form || typeof map === 'undefined') return;
+  const refreshButton = $('trip-refresh');
+  if (!form || !refreshButton || typeof map === 'undefined') return;
   const layer = L.layerGroup().addTo(map);
   let routes = [];
   let selected = 0;
+  let tripLabels = '';
+  let refreshing = false;
   const colors = ['#135caa', '#a14a19', '#6b3ca0'];
   const number = (n) => new Intl.NumberFormat().format(n);
   const km = (m) => m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
@@ -76,6 +79,27 @@
       results.append(nav);
     }
   }
+  async function refreshStationReports() {
+    if (!routes.length || refreshing) return;
+    refreshing = true;
+    refreshButton.disabled = true;
+    status.textContent = 'Refreshing station reports…';
+    try {
+      const stations = await loadStations();
+      routes = routes.map((route) => ({ ...route, closedStations: routeClosures(route, stations) }));
+      routes.sort((a, b) => a.closedStations.length - b.closedStations.length || a.duration - b.duration);
+      selected = 0;
+      status.textContent = tripLabels + ' · Station reports refreshed at ' + new Date().toLocaleTimeString() + '. Reports may be out of date.';
+      draw();
+    } catch (error) {
+      status.textContent = error.message || 'Could not refresh station reports. The previous route results are still shown.';
+    } finally {
+      refreshing = false;
+      refreshButton.disabled = false;
+    }
+  }
+  refreshButton.addEventListener('click', refreshStationReports);
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const from = $('trip-from').value.trim(), to = $('trip-to').value.trim();
@@ -83,6 +107,7 @@
     status.textContent = 'Finding places and comparing routes…';
     routes = []; layer.clearLayers(); results.replaceChildren();
     $('trip-submit').disabled = true;
+    refreshButton.hidden = true;
     try {
       const start = await geocode(from), end = await geocode(to);
       const url = 'https://router.project-osrm.org/route/v1/driving/' + start.point.join(',') + ';' + end.point.join(',') + '?alternatives=3&overview=full&geometries=geojson&steps=false';
@@ -94,7 +119,9 @@
       routes = data.routes.map((route) => ({ ...route, closedStations: routeClosures(route, stations) }));
       routes.sort((a, b) => a.closedStations.length - b.closedStations.length || a.duration - b.duration);
       selected = 0;
-      status.textContent = start.label + ' → ' + end.label + ' · ' + routes.length + ' route option' + (routes.length === 1 ? '' : 's');
+      tripLabels = start.label + ' → ' + end.label;
+      status.textContent = tripLabels + ' · ' + routes.length + ' route option' + (routes.length === 1 ? '' : 's');
+      refreshButton.hidden = false;
       draw();
     } catch (error) {
       status.textContent = error.message || 'Could not calculate this trip. Please try again.';

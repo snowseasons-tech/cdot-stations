@@ -93,3 +93,12 @@ dialog .s-levels input { display:inline; width:auto; margin:0 4px 0 0; }
 .station-header .sub { color:#d0e2f1; }
 .station-brand { margin:0 0 2px; color:var(--sst-ice); font-size:.66rem; font-weight:750; letter-spacing:.15em; }
 :where(a,button,input,select,textarea,summary):focus-visible { outline:3px solid var(--sst-focus); outline-offset:3px; }
+
+/* Station status history */
+.history-list { list-style:none; display:flex; flex-direction:column; gap:8px; max-height:min(58vh,520px); overflow:auto; margin:12px 0; padding:0; }
+.history-entry { padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+.history-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.history-heading time { color:var(--muted); font-size:.78rem; text-align:right; }
+.history-note { margin:6px 0 0; overflow-wrap:anywhere; }
+#history { width:min(92vw,520px); max-height:90vh; overflow:auto; }
+#history h2 { margin:6px 0; font-size:1.05rem; }

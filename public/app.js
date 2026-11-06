@@ -74,6 +74,12 @@ function render() {
       btn.addEventListener('click', (e) => { e.stopPropagation(); openInspections(s); });
       actions.append(btn);
     }
+    const historyBtn = el('button', { className: 'history-btn', textContent: 'Status history' });
+    historyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.dispatchEvent(new CustomEvent('station-history-open', { detail: { id: s.id, name: s.name } }));
+    });
+    actions.append(historyBtn);
     if (actions.children.length) card.append(actions);
     const focus = () => map.flyTo([s.locations[0].lat, s.locations[0].lng], 11);
     card.addEventListener('click', focus);

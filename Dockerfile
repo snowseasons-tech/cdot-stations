@@ -27,9 +27,3 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD wget -qO- http://127.0.0.1:3000/api/stations >/dev/null || exit 1
 CMD ["node", "server.js"]
 
-DEPOT_LAT=39.800670
-DEPOT_LON=-105.194922
-OSRM_URL=http://host.docker.internal:5000
-
-extra_hosts:
-  - "host.docker.internal:host-gateway"

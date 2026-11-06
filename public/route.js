@@ -66,6 +66,18 @@
     return url.toString();
   }
 
+  function reportedAgo(iso) {
+    const updatedAt = Date.parse(iso);
+    if (!Number.isFinite(updatedAt)) return 'report time unknown';
+    const minutes = Math.max(0, Math.floor((Date.now() - updatedAt) / 60_000));
+    if (minutes < 1) return 'reported just now';
+    if (minutes < 60) return 'reported ' + minutes + ' min ago';
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return 'reported ' + hours + ' h ago';
+    const days = Math.floor(hours / 24);
+    return 'reported ' + days + ' day' + (days === 1 ? '' : 's') + ' ago';
+  }
+
   function draw() {
     layer.clearLayers();
     results.replaceChildren();
@@ -80,7 +92,9 @@
       meta.textContent = km(route.distance) + ' · about ' + mins(route.duration);
       const note = document.createElement('div');
       note.className = affected.length ? 'route-alert' : 'route-clear';
-      note.textContent = affected.length ? 'Near closed station' + (affected.length === 1 ? ': ' : 's: ') + affected.map((s) => s.name).join(', ') : 'No currently closed inspection stations detected near this route.';
+      note.textContent = affected.length
+        ? 'Station' + (affected.length === 1 ? '' : 's') + ' marked closed near route: ' + affected.map((s) => s.name + ' (' + reportedAgo(s.updatedAt) + ')').join(', ')
+        : 'No stations are marked closed near this route.';
       const choose = document.createElement('button');
       choose.type = 'button';
       choose.textContent = index === selected ? 'Selected route' : 'View this route';

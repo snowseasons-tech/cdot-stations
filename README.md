@@ -789,11 +789,6 @@ See [CHANGELOG.md](CHANGELOG.md). Add an entry under *Unreleased* when you chang
 
 Proposals, not commitments, in rough order of value and urgency. Each says where it came from so it can be re-judged. When one ships, move it to [CHANGELOG.md](CHANGELOG.md) and delete it here.
 
-### Soon: small and worth doing
-
-1. **A browser check in CI.** The tests don't run the page. A headless check of the built image (page loads, map and layer draw, no console or CSP errors) would have caught CSP regressions automatically instead of by hand.
-2. **Cache headers on static files** (`ETag` / `Cache-Control`), so repeat visits don't refetch the page's ~17 KB (see Performance).
-
 ### Before it goes public
 
 From the Security checklist; these are required, not optional, before exposing the app to the internet.

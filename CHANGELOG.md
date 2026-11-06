@@ -27,6 +27,7 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 
 **Deployment and operations**
 - Docker image, built and published to GitHub Container Registry by GitHub Actions on every push to `main` after the tests pass. The image is booted and checked (home page, API, token enforcement) before it is published.
+- Browser check before publishing: after the image smoke test, the app is loaded in headless Chromium (Playwright) and the build fails if the station list or map pins do not appear, or the console logs an error, including a Content-Security-Policy block (`test/e2e/browser.mjs`).
 - Automatic deploy to the home server through a self-hosted runner: health-checked, with automatic rollback to the previous image if the new one doesn't come up healthy.
 - nginx site (`deploy/nginx-cdot-stations.conf`) forwarding LAN port 8080 to the app.
 - Weekly data refresh workflow: re-fetches CDOT and FMCSA data (including the inspection locations) and, only when it changed, commits it and triggers a deploy. The sync scripts refuse empty results, dropped stations, or more than 20% fewer inspections.

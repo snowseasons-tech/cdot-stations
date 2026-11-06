@@ -15,7 +15,7 @@ function centre(geometry) {
   if (!geometry) return null;
   let points;
   if (geometry.type === 'Point') points = [geometry.coordinates];
-  else if (geometry.type === 'LineString') points = geometry.coordinates;
+  else if (geometry.type === 'MultiPoint' || geometry.type === 'LineString') points = geometry.coordinates;
   else if (geometry.type === 'MultiLineString') points = geometry.coordinates.flat();
   else return null;
   const valid = points.filter(([lon, lat]) => Number.isFinite(lon) && Number.isFinite(lat));

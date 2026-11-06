@@ -14,6 +14,8 @@ const sample = {
         core_details: { event_type: 'work-zone', road_names: ['I-70'], direction: 'eastbound', description: 'Lane closed' } } },
     { id: 'b', type: 'Feature', geometry: { type: 'LineString', coordinates: [[-105.0, 39.8], [-105.2, 39.6]] },
       properties: { road_event_id: 'RE-2', event_status: 'planned', core_details: { event_type: 'work-zone', road_names: ['US-6'] } } },
+    { id: 'd', type: 'Feature', geometry: { type: 'MultiPoint', coordinates: [[-105.0, 39.6], [-105.2, 39.8]] },
+      properties: { core_details: { road_names: ['SH-93'], event_type: 'work-zone' } } },
     { id: 'c', type: 'Feature', geometry: null, properties: { road_event_id: 'RE-3', core_details: {} } },
   ],
 };
@@ -22,7 +24,9 @@ const RESPONSE_OK = (body) => async () => ({ ok: true, status: 200, json: async 
 
 test('the feed is turned into one placed zone per location, with its roads and times', () => {
   const out = normalizeFeed(sample, '2026-11-06T12:00:00.000Z');
-  assert.equal(out.zones.length, 2, 'the zone without a location is left out');
+  assert.equal(out.zones.length, 3, 'the zone without a location is left out');
+  assert.deepEqual([out.zones[2].lat, out.zones[2].lng], [39.7, -105.1], 'a multipoint zone is placed at the middle of its points');
+  assert.equal(out.zones[2].id, 'd', 'a zone without an id takes its feature id');
   assert.deepEqual(out.zones[0], {
     id: 'RE-1', lat: 39.7, lng: -105.2, roads: ['I-70'], direction: 'eastbound', eventType: 'work-zone',
     description: 'Lane closed', status: 'active', start: '2026-11-01T00:00:00Z', end: '2026-11-30T00:00:00Z',
@@ -55,11 +59,11 @@ test('a configured run writes the zones, reports unchanged on a repeat, and keep
   try {
     const env = { WZDX_FEED_URL: 'https://example.test/feed?apiKey=k' };
     assert.equal((await run({ env, fetchImpl: RESPONSE_OK(sample), out, now: () => '2026-11-06T12:00:00.000Z' })).status, 'updated');
-    assert.equal(JSON.parse(await readFile(out, 'utf8')).zones.length, 2);
+    assert.equal(JSON.parse(await readFile(out, 'utf8')).zones.length, 3);
     assert.equal((await run({ env, fetchImpl: RESPONSE_OK(sample), out, now: () => '2026-11-06T12:05:00.000Z' })).status, 'unchanged');
     const empty = await run({ env, fetchImpl: RESPONSE_OK({ type: 'FeatureCollection', features: [] }), out });
     assert.equal(empty.status, 'failed');
-    assert.equal(JSON.parse(await readFile(out, 'utf8')).zones.length, 2, 'the last good zones are kept');
+    assert.equal(JSON.parse(await readFile(out, 'utf8')).zones.length, 3, 'the last good zones are kept');
   } finally {
     await rm(dir, { recursive: true });
   }

@@ -12,7 +12,9 @@ export function normalizeStatus(raw) {
   return STATUSES.includes(status) ? status : null;
 }
 
-export async function importStatuses(store, stations, records, { source }) {
+// `author` is who ran the import (their personal token's name, or null for the shared token);
+// `source` stays the name of the feed the records came from. Both are recorded on each change.
+export async function importStatuses(store, stations, records, { source, author = null }) {
   const result = { updated: [], unchanged: [], skipped: [] };
   const skip = (record, reason) => result.skipped.push({ record, reason });
   const byId = new Map(stations.map((s) => [s.id, s]));
@@ -38,7 +40,7 @@ export async function importStatuses(store, stations, records, { source }) {
     if (current.status === status && current.note === note && current.source === source) { result.unchanged.push(station.id); continue; }
 
     try {
-      await store.set(station.id, { status, note, source, updatedAt });
+      await store.set(station.id, { status, note, source, updatedAt, author });
       result.updated.push(station.id);
     } catch (e) {
       if (!(e instanceof RangeError)) throw e;

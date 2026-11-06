@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../server.js';
-import { summarize } from '../inspections.js';
+import { summarize, createSummaryCache } from '../inspections.js';
 import { buildRows } from '../scripts/sync-inspections.js';
 
 const data = {
@@ -74,4 +74,23 @@ test('app still works without an inspections file', async (t) => {
   const base = await start(t, null);
   const d = await (await fetch(`${base}/api/stations/limon/inspections`)).json();
   assert.equal(d.total, 0);
+});
+
+test('the summary cache returns the same answer as summarize, without recomputing', () => {
+  const summaryFor = createSummaryCache(data);
+  assert.deepEqual(summaryFor('limon', 12), summarize(data, 'limon', 12));
+  assert.deepEqual(summaryFor('limon', 36), summarize(data, 'limon', 36));
+  assert.deepEqual(summaryFor('nowhere'), summarize(data, 'nowhere'));
+  assert.deepEqual(createSummaryCache(null)('limon'), summarize(null, 'limon'));
+});
+
+test('a cached summary is computed once per (station, months) and reused by reference', () => {
+  const summaryFor = createSummaryCache(data);
+  const first = summaryFor('limon', 12);
+  const second = summaryFor('limon', 12);
+  assert.equal(first, second); // same object, not a recomputed copy
+  assert.equal(summaryFor.cache.size, 1);
+  const other = summaryFor('limon', 3);
+  assert.notEqual(other, first);
+  assert.equal(summaryFor.cache.size, 2);
 });

@@ -84,7 +84,8 @@ The parts only meet through files and git: the data pipeline writes `data/*.json
 ```
 server.js ─► store.js ─► atomic-writer.js    status.json: current status per station + capped history
           ─► push.js ─► atomic-writer.js     followers (subscriptions.json), notifier, web-push sender
-          ─► auth.js           constant-time token check, failed-attempt lockout
+          ─► auth.js           constant-time token check (shared and per-person), failed-attempt lockout
+          ─► access.js         Cloudflare Access JWT verification at the origin (optional)
           ─► stripe.js          Founding Member checkout and webhook verification (no Stripe package)
           ─► members.js ─► atomic-writer.js   who has bought (members.json)
           ─► importer.js ─► store.js     validates and applies imported records
@@ -110,7 +111,7 @@ scripts/               ─ standalone; none import server code
 | `data/stations.json` | `{ source, fetchedAt, stations: [{ id, name, highway, planned, phone, locations: [{ direction, milepost, lat, lng }] }] }` |
 | `data/inspections.json` | `{ source, fetchedAt, through, rows: [{ station, month, level, total, vehicleOos, driverOos }] }` |
 | `data/inspection-locations.json` | `{ source, fetchedAt, through, coverage, locations: [{ id, name, kind, lat, lng, levels }] }` |
-| `status.json` (volume) | `{ current: { <id>: { status, note, updatedAt, source } }, history: [ ... last 1000 ... ] }` |
+| `status.json` (volume) | `{ current: { <id>: { status, note, updatedAt, source, author } }, history: [ ... last 1000 ... ] }` (`author`: who made the change when personal tokens are configured, else null) |
 | `subscriptions.json` (volume) | `{ subscriptions: { <hash>: { endpoint, keys, stations: ['all'] or [ids], createdAt, updatedAt } } }`, one per phone (max 500) |
 | `members.json` (volume) | `{ members: { <stripe session id>: { email, name, amount, currency, paidAt, months, expiresAt, needsReview, accessGranted, grantedAt, removedAt } }, events: [ ...last 500 Stripe event ids... ] }`, one per purchase |
 
@@ -153,13 +154,13 @@ Each failure has a different safety net:
 - **Almost no dependencies, plain `node:http`.** The only package is `web-push`, used because web push's encryption and signed headers are easy to get subtly wrong. It is pinned to an exact version with a lockfile, installed without install scripts, and kept current by Dependabot PRs. Everything else is Node's standard library.
 - **JSON files, not a database.** Status is a few KB with one writer, so a file is simple to back up, diff and restore. The cost is below.
 - **Data baked into the image.** Predictable and fast; the cost is that fresher data means a (automatic) redeploy.
-- **Status has a source and a time.** Every update records where it came from (`manual` or an import name), so imports and people can coexist and stale imports can't overwrite newer entries.
-- **A shared write token.** Enough for a small trusted group; it is the part to replace first if this goes public.
+- **Status has a source, a time, and (with personal tokens) an author.** Every update records where it came from (`manual` or an import name), so imports and people can coexist and stale imports can't overwrite newer entries. With `WRITE_TOKENS` configured it also records *who* made the change, which is the audit trail.
+- **A shared write token by default, personal tokens when you want attribution.** `STATUS_TOKEN` is enough for a small trusted group; set `WRITE_TOKENS` (a JSON object of name to token, e.g. `{"alice":"..."}`) and each person's change is recorded under their name (see Security).
 
 ### Known limits
 
 - **One instance only.** Status is held in memory and read from disk at startup, so two instances would diverge. Scaling out means moving status to a real database.
-- **No user accounts or audit of who changed what**, only the source and time.
+- **No passwords or sign-in for writes, only tokens.** With `WRITE_TOKENS` every change is attributable to a person, but there are still no user accounts, sessions or password resets: tokens are handed out and revoked by editing the environment.
 - **HTTP on the LAN.** HTTPS and HSTS belong at the reverse proxy before the app is public.
 
 ## Performance
@@ -210,8 +211,9 @@ With nginx compression enabled (see below) a visitor receives the gzip column fr
 
 **Static files are revalidated, not cached blindly.** Every static file is sent with an `ETag` and `Cache-Control: no-cache` (browsers re-check each load and get a tiny `304 Not Modified` when unchanged), and `CDN-Cache-Control: no-store` so Cloudflare keeps no copy. This was added after a real problem: with no cache instructions at all, Cloudflare and phones kept serving an old `app.js` for hours after a deploy, so new features simply didn't appear. Speed was never the issue; serving the right version is.
 
-Not fixed:
-1. **Summaries are recomputed on every request** (about 1,000 rows filtered per station), although the data is read-only at runtime. A cache would be trivial and is unnecessary at this traffic.
+Fixed:
+
+1. **Summaries were recomputed on every request** (about 1,000 rows filtered per station). Since the inspection data is read-only at runtime, each (station, months) summary is now computed once per process and reused (`createSummaryCache` in `inspections.js`).
 
 ### Measuring it yourself
 
@@ -237,6 +239,8 @@ Benchmark a temporary instance, not the production container, and stop it by PID
 |---|---|---|
 | `PORT` / `HOST` | `3000` / `127.0.0.1` | Bind address |
 | `STATUS_TOKEN` | unset | If set, `PUT /api/stations/:id/status` and `POST /api/import` require `Authorization: Bearer <token>` |
+| `WRITE_TOKENS` | unset | JSON object mapping a person's name to their personal write token, e.g. `{"alice":"<token>"}`. When set, each change records that person as its `author` (the audit trail). Can be used alone or together with `STATUS_TOKEN` |
+| `ACCESS_TEAM`, `ACCESS_AUD` | unset | Turn on Cloudflare Access verification at the origin (both or neither; see Security) |
 | `STATUS_FILE` | `data/status.json` | Where status and history are stored |
 | `SUBSCRIPTIONS_FILE` | `data/subscriptions.json` | Where push followers are stored |
 | `MEMBERS_FILE` | `data/members.json` | Where membership purchases are stored |
@@ -336,7 +340,7 @@ You need a hostname on a domain that is on Cloudflare, for example `stations.sno
 
 **Worth knowing**
 - The tunnel token is a credential like `STATUS_TOKEN`. To rotate it, delete the tunnel in the dashboard and create a new one.
-- Anyone on the home network reaches nginx directly and skips Access; that is intended. If you ever want the app itself to insist on a valid Access login, Cloudflare can attach a signed token to each request that the origin verifies (the tunnel's *Protect with Access* setting); not built here.
+- Anyone on the home network reaches nginx directly and skips Access; that is intended. The app can also verify the Access sign-in itself: set `ACCESS_TEAM` (the Zero Trust team name) and `ACCESS_AUD` (the application's AUD tag), and a request that came through the tunnel (the proxy reports a public visitor address) must carry a valid `Cf-Access-Jwt-Assertion` or it gets a 401. LAN visitors and the container's health check are exempt, and the public sales hostname stays public. Off unless both are set.
 - When an Access sign-in expires, the page's data requests get a sign-in page instead of JSON. The page will need to handle that (planned with the installable app); until then a stale tab may show an error and need a reload.
 - `scripts/check-public-access.sh` is safe to run any time, for example after changing the Access policy.
 
@@ -522,12 +526,13 @@ To change the schedule, edit the `cron` line. Bot commits go straight to `main`;
 
 | Asset | Controls |
 |---|---|
-| **Status data** (who can change it) | Writes (`PUT .../status`, `POST /api/import`) need a bearer token, compared in constant time. After 10 failed attempts in a minute a client gets `429` and its token isn't checked again until the window passes. The server refuses to listen on a non-local address without a token. Input is validated (status must be open/closed/unknown, notes up to 280 characters, body size capped at 10 KB, 500 KB for imports), and for manual updates the server sets the source and time itself, so a caller can't forge them (an import may supply its own timestamp, but never one in the future, and it can't overwrite a newer status). |
+| **Status data** (who can change it) | Writes (`PUT .../status`, `POST /api/import`) need a bearer token, compared in constant time. With `WRITE_TOKENS` set, each person has their own token and every change records them as its `author` (in the current status and in the history, so the audit trail survives); the shared `STATUS_TOKEN` keeps working and records no author. After 10 failed attempts in a minute a client gets `429` and its token isn't checked again until the window passes. The server refuses to listen on a non-local address without a token. Input is validated (status must be open/closed/unknown, notes up to 280 characters, body size capped at 10 KB, 500 KB for imports), and for manual updates the server sets the source, time and author itself, so a caller can't forge them (an import may supply its own timestamp, but never one in the future, and it can't overwrite a newer status). |
 | **People using the page** (XSS and injection) | Notes and station names are put on the page as text, never as HTML. A Content-Security-Policy allows scripts only from this origin and unpkg (no inline scripts), connections only to this origin, and no framing; plus `nosniff`, a referrer policy and a permissions policy. API responses are `no-store`. Reads use no cookies, so there is no CSRF exposure: the token is sent in a header by the page's own code. |
 | **Selling memberships** | Off unless all the Stripe settings are present, and a live Stripe key is refused unless `ALLOW_LIVE=1`. On the public sales hostname the app answers only the sales pages and Stripe's webhook; everything else, including all of the tracker's data and the member list, returns 404 there even with the write token. A purchase is recorded only from a webhook whose signature verifies (HMAC-SHA256 of the exact bytes, five-minute window against replays) and only if it is paid, a one-time payment, and tagged as this product, so other products on the same Stripe account and forged messages are ignored; repeats are harmless. The price is read from Stripe, never from the request, and the page can only send people to stripe.com. Checkout starts only from a JSON request that is not cross-site, with the terms agreed, rate limited to 10 a minute per client. Card details never touch this app, and neither the secret key nor Stripe's error text is ever returned or logged. The member list needs the write token. |
 | **Files on the server** | Static files are served only from `public/` (paths are normalized and must stay inside it). |
 | **Third-party code** | Leaflet loads from unpkg at an exact version with Subresource Integrity hashes, so a tampered file won't run (`npm test` enforces the pin and hashes). The one npm package, `web-push`, is pinned to an exact version with a committed lockfile, installed with scripts disabled (none of its 17 packages has an install script), and checked with `npm audit` (no known vulnerabilities when added); Dependabot opens weekly update PRs. |
 | **Push notifications** | A follower's push address must belong to a real push service (Google, Mozilla, Apple or Microsoft, over HTTPS, no ports or credentials), because the server sends requests to it; otherwise anyone could aim the server at the home network. The follow endpoints accept only `application/json` and refuse requests the browser marks cross-site, so another website can't forge a subscription from a team member's browser; they are rate limited (30 a minute per client) and capped at 500 subscriptions. Messages are encrypted so only the subscribed phone can read them, and the VAPID private key is a secret like the write token. |
+| **The app behind the tunnel** | Cloudflare Access decides who can open the site. Optionally the app verifies the sign-in itself: with `ACCESS_TEAM` and `ACCESS_AUD` set, a request that arrived through the tunnel (the proxy reports a public visitor address) must carry a valid `Cf-Access-Jwt-Assertion` (ES256, verified against Cloudflare's published keys, issuer and audience checked, expiry and clock skew allowed) or it gets a 401. This means a tunnel or Access misconfiguration can't expose the app: LAN visitors and the container's health check are exempt (private or no address), and the public sales hostname stays public. Keys are loaded once per process; a rotation is picked up by the next deploy's restart. No npm dependency: Node's crypto does the verification. |
 | **Secrets** | The token lives in a GitHub secret, in `~/cdot-stations/env` on the server (mode 600), and is given to the container through `--env-file`, never on a command line or in the image. There are no SSH keys or cloud credentials: deploys use a runner on the server and the workflow's own short-lived token, and the registry login is removed after each deploy. |
 | **The container** | Runs as a non-root user, is published only on `127.0.0.1` (only the local nginx can reach it), and is health-checked. |
 | **Backups** | Go to a private GitHub repository. They contain only statuses and notes, nothing credential-like, but anything typed into a note is in them. |
@@ -540,7 +545,7 @@ The lockout identifies a client by connection address, or by the proxy's `X-Real
 
 ### Trust assumptions to know about
 
-- **One shared token, no accounts.** Anyone holding it can change any status; there is no record of who did. It is stored in the browser's `localStorage` once entered, so an XSS bug would expose it (the CSP is the main defence).
+- **Tokens, not accounts.** Anyone holding a token can change any status; with `WRITE_TOKENS` at least every change says which person's token it was, but tokens can't be scoped to a station or revoked individually except by editing the environment. Tokens are stored in the browser's `localStorage` once entered, so an XSS bug would expose them (the CSP is the main defence).
 - **The self-hosted runner executes this repository's workflow code on the server.** Anyone who can push to `main` or edit a workflow can run commands there. Keep the repository private and its write access small. Only the deploy job uses the runner, and pull requests never deploy.
 - **Docker access is root-equivalent.** Users in the `docker` group (including the runner's user) can read the token from the container's environment.
 - **GitHub Actions are pinned to major versions** (`@v4`), not commit SHAs, and the base image is `node:22-alpine` without a digest. That trades supply-chain strictness for automatic security updates.
@@ -551,7 +556,7 @@ The lockout identifies a client by connection address, or by the proxy's `X-Real
 1. **HTTPS and HSTS** at the reverse proxy (a Cloudflare Tunnel or Let's Encrypt), and drop the plain-HTTP port. The token must never cross the network unencrypted.
 2. **Expose only the proxy**: forward or tunnel one port, not the machine. Confirm with `ss -ltn` what else listens on all interfaces.
 3. **Rate limit at nginx** (`limit_req`) for all traffic, not just failed tokens, and pass the real client address as `X-Real-IP`.
-4. **Replace the shared token** with per-person logins if more than a few people will write, and rotate it before launch.
+4. **Hand out personal tokens** (`WRITE_TOKENS`) instead of the shared token if more than a few people will write, so every change is attributable, and rotate them before launch.
 5. **Consider pinning Actions and the base image by digest**, with automated update PRs.
 6. **Protect `main`** with required checks (letting the data-refresh bot through) so a stray push can't deploy.
 
@@ -824,7 +829,7 @@ A mobile app is wanted, for the team only, on **iPhone and Android**, hosted by 
 1. **Reach the server from anywhere: done.** A Cloudflare Tunnel with Cloudflare Access at `https://stations.snowseasonstech.net` (set up and verified 2026-10-21; see "Public access through Cloudflare" for how it works and how to turn it off).
 2. **Installable web app, read-only: done.** A manifest and a minimal service worker on the existing page: it installs to the home screen from a link and opens full-screen. See "Installable app" below and [docs/install.md](docs/install.md), the guide for the team.
 3. **Notifications (web push): built; needs the one-time setup and a test on a real phone.** A saved change to a station's status or note notifies the people following it, and nothing else does. See "Notifications" for how to turn it on.
-4. **Updating statuses from the phone.** Needs per-person logins and the status history on the page first, so changes are attributable. This is the "want to change that" step.
+4. **Updating statuses from the phone.** Per-person tokens and the audit trail are built (`WRITE_TOKENS`; see Security); what remains is the phone's own UI for entering a personal token, so changes are attributable from the start. This is the "want to change that" step.
 5. **Native wrapper (Capacitor) or native apps** only if a PWA turns out not to be enough.
 
 **Known platform constraints.** On Android, Chrome supports install and push directly. On iPhone, web push works only for a web app **added to the Home Screen** on iOS 16.4 or newer, and the user must grant permission from a tap inside the installed app. So iPhone users need to be guided, and anyone on an older iPhone won't get notifications until they update.

@@ -52,3 +52,17 @@ export function summarize(data, stationId, months = 12) {
     byLevel: [...levels].sort(([a], [b]) => a - b).map(([level, count]) => ({ level: Number(level), name: LEVELS[level] ?? `Level ${level}`, count })),
   };
 }
+
+// The inspection data is read-only at runtime (loaded once at startup, refreshed only by a redeploy),
+// so a summary for a given (station, months) can never change for the life of the process. This memoizes
+// them, so the endpoints stop re-filtering the ~1,000 monthly rows on every request.
+export function createSummaryCache(data) {
+  const cache = new Map();
+  const summaryFor = (stationId, months = 12) => {
+    const key = `${stationId}:${months}`;
+    if (!cache.has(key)) cache.set(key, summarize(data, stationId, months));
+    return cache.get(key);
+  };
+  summaryFor.cache = cache; // exposed for tests
+  return summaryFor;
+}

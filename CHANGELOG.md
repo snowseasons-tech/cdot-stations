@@ -8,6 +8,17 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 
 ### Added
 
+**Per-person write tokens and audit trail**
+- `WRITE_TOKENS`, an optional JSON object mapping a person's name to their personal write token (e.g. `{"alice":"<token>"}`). Works alone or alongside the shared `STATUS_TOKEN`, and every candidate is compared in constant time before a match is named, so timing doesn't leak which token came close.
+- When a personal token is used, the server records that person as the `author` of the change, on the current status and on every history entry (manual updates and imports alike). That is the audit trail the roadmap asked for: the history now answers "who changed what, when, and how". A bad `WRITE_TOKENS` value (not JSON, a bad name, a short token) stops the server at startup instead of running with a half-parsed list.
+- The startup guard and the members endpoints accept either the shared token or a personal one; the failed-attempt lockout is shared by all of them. `npm test` covers the new path (`test/author.test.js`), and nothing changes for a server configured with `STATUS_TOKEN` only: those writes keep recording no author.
+
+**Cloudflare Access verification at the origin**
+- `ACCESS_TEAM` and `ACCESS_AUD` (both or neither) turn on verification of Cloudflare Access's signed JWT at the origin, so the app itself insists on a valid sign-in instead of trusting only the tunnel: a request that arrived through the tunnel (the proxy reports a public visitor address, so `TRUST_PROXY=1`) must carry a valid `Cf-Access-Jwt-Assertion` (ES256, verified against Cloudflare's published JWKS with Node's crypto; issuer, audience, expiry and clock skew checked) or it is refused with a 401. Home-network visitors and the container's health check report a private or no address and are exempt, so the LAN route and the deploy's health check keep working; the public sales hostname stays public. Keys are fetched once per process (a rotation is picked up by the next deploy's restart), and the feature is off unless configured. Covered by `test/access.test.js` against injected keys; no Cloudflare account is involved.
+
+**Inspection summary cache**
+- Per-station inspection summaries are now computed once per (station, months) and reused for the life of the process (`createSummaryCache` in `inspections.js`), instead of re-filtering about 1,000 monthly rows on every request. The data is read-only at runtime, so the results can't go stale.
+
 **Stations and map**
 - Map and list of Colorado's 10 commercial vehicle inspection stations (CSP/CDOT ports of entry) with highway, mileposts, travel directions and phone numbers, taken from CDOT's public ports-of-entry layer. Platteville is shown as a planned site.
 - Open / closed / unknown status per station with an optional note, the time of the update and its source, plus a history of the last 1000 changes, shown on the station page. Updated from the page ("Update status") or the API.
@@ -40,6 +51,8 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - Alerts for backups through GitHub issues: one when a backup fails, and one when no backup has arrived for over 30 hours (server off, cron stopped).
 
 ### Security
+- Cloudflare Access JWTs are verified at the origin when `ACCESS_TEAM` and `ACCESS_AUD` are set (see Added): a request through the tunnel without a valid, current sign-in for this application is refused, so a tunnel or Access misconfiguration can't expose the app. LAN visitors and health checks are exempt by address, which can't be spoofed because nginx always overwrites `X-Real-IP`.
+- Per-person write tokens (`WRITE_TOKENS`) make changes attributable: the author is set by the server from the token that authenticated the request, never accepted from the request body, so a caller can't forge or scrub it. The shared `STATUS_TOKEN` still works and records no author.
 - Selling memberships adds the app's first public surface, restricted by hostname to the sales pages and Stripe's webhook (404 for everything else, even with the write token). Webhooks are accepted only with a valid signature inside a five-minute window, and only for paid purchases of this product; the Stripe secret key and Stripe's error text are never returned or logged.
 - The push follow endpoints only accept real push-service addresses (so the server can't be aimed at other hosts), JSON requests that aren't marked cross-site, and are rate limited and capped.
 - The project now has one npm dependency, `web-push`, pinned to an exact version with a lockfile and installed without install scripts; Dependabot opens weekly update PRs for it, the GitHub Actions and the Node base image.
@@ -55,12 +68,13 @@ Nothing has been tagged or released yet (`package.json` says `0.1.0`, but no ver
 - The nginx site compresses JSON, JavaScript and CSS responses (the map data goes from 106 KB to about 16 KB). Applies when `scripts/install-nginx-site.sh` is re-run on the server.
 
 ### Fixed
+- Inspection summaries are no longer recomputed on every request: each (station, months) summary is computed once per process and reused, which removes about 1,000 row filters per request on the busy endpoints.
 - Static files (the page, scripts, styles, icons) are now sent with an ETag, `Cache-Control: no-cache` and `CDN-Cache-Control: no-store`. Before, Cloudflare and phones kept serving old copies for hours after a deploy, so new features didn't appear (the Follow buttons never showed on a phone running an old `app.js`).
 - Simultaneous status updates no longer fail: disk writes are queued, so overlapping updates can't race on the temporary file (previously all but one of a burst of concurrent updates returned an error, though the data was still saved).
 
 ### Known limitations
 - Status is not live; it is only as current as the last manual update or import.
 - Served over plain HTTP on the home network. HTTPS and HSTS still need to be set up at the reverse proxy before the app is exposed publicly.
-- A single shared write token, no per-user accounts.
+- Tokens, not accounts: with only the shared `STATUS_TOKEN`, changes are not attributable; personal tokens (`WRITE_TOKENS`) add the audit trail but no sessions, password resets or per-station scopes.
 
 [Unreleased]: https://github.com/snowseasons-tech/cdot-stations/commits/main

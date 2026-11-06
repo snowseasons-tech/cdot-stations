@@ -5,10 +5,11 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from './store.js';
 import { importStatuses } from './importer.js';
-import { summarize } from './inspections.js';
+import { summarize, createSummaryCache } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
 import { parseSearch, createSearcher, exportAll, toCsv, toSql, EXPORT_MAX, SearchError } from './inspection-search.js';
-import { FailureLimiter, RateLimiter, tokenMatches } from './auth.js';
+import { FailureLimiter, RateLimiter, identify, parseWriteTokens } from './auth.js';
+import { loadAccessConfig, createAccessVerifier, requiresAccess } from './access.js';
 import { Members } from './members.js';
 import { loadStripeConfig, createCheckoutSession, fetchOffer, describeOffer, termOf, verifyWebhook, StripeError, PRODUCT } from './stripe.js';
 import { Subscriptions, LimitReached, createNotifier, createWebPushSender, loadPushConfig, validateRequest, isPushEndpoint } from './push.js';
@@ -48,7 +49,9 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
   stripeConfig = loadStripeConfig(), stripeFetch = fetch, joinLimiter = new RateLimiter({ max: 10, windowMs: 60_000 }),
   pushConfig = loadPushConfig(), pushSender, pushLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }),
   searchImpl = createSearcher(), searchLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }),
-  exportImpl = exportAll, exportLimiter = new RateLimiter({ max: 5, windowMs: 60_000 }) } = {}) {
+  exportImpl = exportAll, exportLimiter = new RateLimiter({ max: 5, windowMs: 60_000 }),
+  writeTokens = parseWriteTokens(process.env.WRITE_TOKENS),
+  accessConfig = loadAccessConfig(), accessFetch = fetch } = {}) {
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
   const locations = await readFile(locationsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
@@ -62,8 +65,12 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
   await store.load();
   const members = new Members(membersFile);
   await members.load();
+  // Inspection data is read-only at runtime, so each (station, months) summary is computed once and reused.
+  const summaryFor = createSummaryCache(inspections);
   const find = (id) => stations.find((s) => s.id === id);
-  const view = (s) => ({ ...s, ...store.get(s.id), inspections: summarize(inspections, s.id) });
+  const view = (s) => ({ ...s, ...store.get(s.id), inspections: summaryFor(s.id) });
+  // Cloudflare Access verification at the origin: off unless ACCESS_TEAM and ACCESS_AUD are set.
+  const verifyAccess = accessConfig ? createAccessVerifier({ config: accessConfig, fetchImpl: accessFetch }) : null;
 
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -74,9 +81,12 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
   // but only when TRUST_PROXY=1 (otherwise a caller could spoof it to dodge the lockout).
   const clientOf = (req) => (trustProxy && req.headers['x-real-ip']) || req.socket.remoteAddress || 'unknown';
 
-  // Returns true if the caller may write; otherwise sends the 401/429 and returns false.
+  // Returns { author } when the caller may write: author is the user's name when personal tokens are
+  // configured (WRITE_TOKENS) and the request carried one, or null for the shared STATUS_TOKEN. When
+  // no write token is configured at all it returns {} (an unauthenticated server, e.g. tests).
+  // On failure it sends the 401/429 and returns false.
   const authorize = (req, res) => {
-    if (!token) return true;
+    if (!token && writeTokens.size === 0) return {};
     const client = clientOf(req);
     const wait = limiter.retryAfter(client);
     if (wait) {
@@ -84,10 +94,13 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       json(res, 429, { error: 'too many failed attempts; try again later' });
       return false;
     }
-    if (tokenMatches(req.headers.authorization, token)) return true;
-    limiter.fail(client);
-    json(res, 401, { error: 'unauthorized' });
-    return false;
+    const name = identify(req.headers.authorization, { token, tokens: writeTokens });
+    if (name === null) {
+      limiter.fail(client);
+      json(res, 401, { error: 'unauthorized' });
+      return false;
+    }
+    return { author: name === 'shared' ? null : name };
   };
 
   const readBody = async (req, limit = 10_000) => {
@@ -127,6 +140,17 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
       // ---- selling memberships (off unless Stripe is configured) ----
       const selling = Boolean(stripeConfig);
       const salesPath = pathname === '/join' || pathname.startsWith('/join/') || ['/api/offer', '/api/checkout', '/api/stripe-webhook'].includes(pathname);
+
+      // ---- Cloudflare Access verification at the origin ----
+      // A request that came through the tunnel (the proxy reports a public visitor address) must carry a
+      // valid Access sign-in, so a tunnel misconfiguration can't expose the app. LAN visitors and the
+      // container's health check report private or no address and are exempt. The public sales hostname
+      // stays public (its pages sell to strangers; Stripe's webhook carries its own signature).
+      if (verifyAccess && requiresAccess(req, { trustProxy })) {
+        const salesHost = selling && (req.headers.host ?? '').toLowerCase() === stripeConfig.joinHost;
+        if (!salesHost && !(await verifyAccess(req))) return json(res, 401, { error: 'sign-in required' });
+      }
+
       // The public sales hostname answers only the sales pages and Stripe's webhook; the tracker's data is never served on it.
       if (selling && (req.headers.host ?? '').toLowerCase() === stripeConfig.joinHost) {
         if (pathname === '/') { res.writeHead(302, { location: '/join' }); return res.end(); }
@@ -214,13 +238,14 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         if (req.method === 'GET' && m[2] === '/inspections') {
           const months = Number(new URL(req.url, 'http://x').searchParams.get('months') ?? 12);
           if (!Number.isInteger(months) || months < 1 || months > 36) return json(res, 400, { error: 'months must be an integer from 1 to 36' });
-          return json(res, 200, summarize(inspections, s.id, months));
+          return json(res, 200, summaryFor(s.id, months));
         }
         if (req.method === 'PUT' && m[2] === '/status') {
-          if (!authorize(req, res)) return;
+          const who = authorize(req, res);
+          if (!who) return;
           if (s.planned) return json(res, 409, { error: 'station is not open yet' });
           const { status, note } = await readBody(req);
-          return json(res, 200, await store.set(s.id, { status, note }));
+          return json(res, 200, await store.set(s.id, { status, note, author: who.author }));
         }
         return json(res, 405, { error: 'method not allowed' });
       }
@@ -302,7 +327,7 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         }
         const wait = searchLimiter.allow(clientOf(req));
         if (wait) {
-          res.setHeader('retry-after', String(wait));
+          res.setHeader('retry-after', wait);
           return json(res, 429, { error: 'too many searches; try again shortly' });
         }
         try {
@@ -314,11 +339,12 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
 
       if (pathname === '/api/import') {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
-        if (!authorize(req, res)) return;
+        const who = authorize(req, res);
+        if (!who) return;
         const { source, records } = await readBody(req, 500_000);
         if (!/^[a-z0-9_-]{1,40}$/i.test(source ?? '')) return json(res, 400, { error: 'source must be 1-40 letters, digits, - or _' });
         if (!Array.isArray(records) || records.length > 500) return json(res, 400, { error: 'records must be an array of up to 500 items' });
-        return json(res, 200, await importStatuses(store, stations, records, { source }));
+        return json(res, 200, await importStatuses(store, stations, records, { source, author: who.author }));
       }
 
       if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });
@@ -354,8 +380,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3000);
   const host = process.env.HOST ?? '127.0.0.1';
   const loopback = ['127.0.0.1', 'localhost', '::1'].includes(host);
-  if (!loopback && !process.env.STATUS_TOKEN && process.env.ALLOW_OPEN_WRITES !== '1') {
-    console.error(`Refusing to listen on ${host} without STATUS_TOKEN: anyone could change station status. Set STATUS_TOKEN (or ALLOW_OPEN_WRITES=1 to override).`);
+  if (!loopback && !process.env.STATUS_TOKEN && !process.env.WRITE_TOKENS && process.env.ALLOW_OPEN_WRITES !== '1') {
+    console.error(`Refusing to listen on ${host} without STATUS_TOKEN or WRITE_TOKENS: anyone could change station status. Set STATUS_TOKEN (or ALLOW_OPEN_WRITES=1 to override).`);
     process.exit(1);
   }
   (await createApp()).listen(port, host, () => console.log(`CDOT stations tracker on http://${host}:${port}`));

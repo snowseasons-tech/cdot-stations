@@ -38,13 +38,40 @@
     if (!response.ok || response.type === 'opaqueredirect') throw new Error('Could not load current station statuses. Sign in again and retry.');
     return (await response.json()).stations ?? [];
   }
-  function routeClosures(route, stations) {
-    const coords = route.geometry.coordinates;
-    const stride = Math.max(1, Math.floor(coords.length / 700));
-    const samples = coords.filter((_, i) => i % stride === 0).map(([lng, lat]) => [lat, lng]);
-    return stations.filter((station) => station.status === 'closed' && !station.planned && (station.locations ?? []).some((loc) =>
-      samples.some((point) => haversine(point, [loc.lat, loc.lng]) <= 2500)));
+  function distanceToSegmentMeters(point, start, end) {
+    const radius = 6371000;
+    const radians = Math.PI / 180;
+    const cosLat = Math.cos(point[0] * radians);
+    const x = (lng) => radius * radians * (lng - point[1]) * cosLat;
+    const y = (lat) => radius * radians * (lat - point[0]);
+    const sx = x(start[1]), sy = y(start[0]);
+    const dx = x(end[1]) - sx, dy = y(end[0]) - sy;
+    const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared ? Math.max(0, Math.min(1, -(sx * dx + sy * dy) / lengthSquared)) : 0;
+    return Math.hypot(sx + t * dx, sy + t * dy);
   }
+  function distanceToRouteMeters(point, coordinates) {
+    if (coordinates.length === 1) {
+      const [lng, lat] = coordinates[0];
+      return haversine(point, [lat, lng]);
+    }
+    let nearest = Infinity;
+    for (let i = 0; i < coordinates.length - 1; i++) {
+      const [lngA, latA] = coordinates[i];
+      const [lngB, latB] = coordinates[i + 1];
+      nearest = Math.min(nearest, distanceToSegmentMeters(point, [latA, lngA], [latB, lngB]));
+    }
+    return nearest;
+  }
+  function routeClosures(route, stations) {
+    const coordinates = route.geometry.coordinates;
+    return stations.flatMap((station) => {
+      if (station.status !== 'closed' || station.planned) return [];
+      const nearest = Math.min(...(station.locations ?? []).map((loc) => distanceToRouteMeters([loc.lat, loc.lng], coordinates)));
+      return nearest <= 2500 ? [{ ...station, routeDistanceMeters: nearest }] : [];
+    });
+  }
+  const distanceLabel = (meters) => meters >= 1000 ? (meters / 1000).toFixed(1) + ' km' : Math.round(meters) + ' m';
   function googleDirectionsUrl(route) {
     const url = new URL('https://www.google.com/maps/dir/');
     url.searchParams.set('api', '1');
@@ -93,7 +120,7 @@
       const note = document.createElement('div');
       note.className = affected.length ? 'route-alert' : 'route-clear';
       note.textContent = affected.length
-        ? 'Station' + (affected.length === 1 ? '' : 's') + ' marked closed near route: ' + affected.map((s) => s.name + ' (' + reportedAgo(s.updatedAt) + ')').join(', ')
+        ? 'Station' + (affected.length === 1 ? '' : 's') + ' marked closed within 2.5 km: ' + affected.map((s) => s.name + ' (' + distanceLabel(s.routeDistanceMeters) + ' from route; ' + reportedAgo(s.updatedAt) + ')').join(', ')
         : 'No stations are marked closed near this route.';
       const choose = document.createElement('button');
       choose.type = 'button';

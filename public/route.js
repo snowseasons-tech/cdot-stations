@@ -67,8 +67,16 @@
     const coordinates = route.geometry.coordinates;
     return stations.flatMap((station) => {
       if (station.status !== 'closed' || station.planned) return [];
-      const nearest = Math.min(...(station.locations ?? []).map((loc) => distanceToRouteMeters([loc.lat, loc.lng], coordinates)));
-      return nearest <= 2500 ? [{ ...station, routeDistanceMeters: nearest }] : [];
+      let nearest = Infinity;
+      let routeLocation = null;
+      for (const location of station.locations ?? []) {
+        const distance = distanceToRouteMeters([location.lat, location.lng], coordinates);
+        if (distance < nearest) {
+          nearest = distance;
+          routeLocation = location;
+        }
+      }
+      return nearest <= 2500 ? [{ ...station, routeDistanceMeters: nearest, routeLocation }] : [];
     });
   }
   const distanceLabel = (meters) => meters >= 1000 ? (meters / 1000).toFixed(1) + ' km' : Math.round(meters) + ' m';
@@ -119,9 +127,30 @@
       meta.textContent = km(route.distance) + ' · about ' + mins(route.duration);
       const note = document.createElement('div');
       note.className = affected.length ? 'route-alert' : 'route-clear';
-      note.textContent = affected.length
-        ? 'Station' + (affected.length === 1 ? '' : 's') + ' marked closed within 2.5 km: ' + affected.map((s) => s.name + ' (' + distanceLabel(s.routeDistanceMeters) + ' from route; ' + reportedAgo(s.updatedAt) + ')').join(', ')
-        : 'No stations are marked closed near this route.';
+      if (affected.length) {
+        const prefix = document.createElement('span');
+        prefix.textContent = 'Station' + (affected.length === 1 ? '' : 's') + ' marked closed within 2.5 km: ';
+        note.append(prefix);
+        affected.forEach((station, stationIndex) => {
+          if (stationIndex) note.append(document.createTextNode('; '));
+          const location = station.routeLocation;
+          if (location && window.conditionsLinks?.cotripMapUrl) {
+            const link = document.createElement('a');
+            link.href = window.conditionsLinks.cotripMapUrl(location);
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = station.name;
+            note.append(link);
+          } else {
+            note.append(document.createTextNode(station.name));
+          }
+          const details = document.createElement('span');
+          details.textContent = ' (' + distanceLabel(station.routeDistanceMeters) + ' from route; ' + reportedAgo(station.updatedAt) + ')';
+          note.append(details);
+        });
+      } else {
+        note.textContent = 'No stations are marked closed near this route.';
+      }
       const choose = document.createElement('button');
       choose.type = 'button';
       choose.textContent = index === selected ? 'Selected route' : 'View this route';

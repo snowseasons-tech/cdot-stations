@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <link rel="stylesheet" href="/snow-theme.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="route.css">
 </head>
 <body>
   <header class="station-header">
@@ -54,6 +55,18 @@
         </ul>
         <p class="sub">Each station below also has a "Live road conditions nearby" link that opens COtrip on that spot.</p>
       </details>
+      <section id="trip-planner" class="trip-planner" aria-labelledby="trip-title">
+        <h2 id="trip-title">Plan or reroute a trip</h2>
+        <p class="trip-help">Compare driving routes with inspection stations currently marked closed.</p>
+        <form id="trip-form" class="trip-form">
+          <label for="trip-from">Starting point<input id="trip-from" name="from" required maxlength="120" placeholder="City, address, or intersection" autocomplete="street-address"></label>
+          <label for="trip-to">Destination<input id="trip-to" name="to" required maxlength="120" placeholder="City, address, or intersection" autocomplete="street-address"></label>
+          <button id="trip-submit" type="submit">Compare routes</button>
+        </form>
+        <p id="trip-status" class="trip-status" aria-live="polite"></p>
+        <div id="trip-results" class="trip-results"></div>
+        <p class="trip-disclaimer">Route estimates use OpenStreetMap services. Station statuses are manually reported and may be out of date; check COtrip for live closures, weather, and traffic before changing your trip.</p>
+      </section>
       <section id="notify" aria-label="Notifications" hidden>
         <label class="toggle" id="notify-toggle"><input type="checkbox" id="notify-all"> <strong>Notify me about every station</strong></label>
         <p id="notify-note" class="sub" aria-live="polite"></p>
@@ -140,5 +153,6 @@
   <script src="search.js"></script>
   <script src="install.js"></script>
   <script src="follow.js"></script>
+  <script src="route.js"></script>
 </body>
 </html>

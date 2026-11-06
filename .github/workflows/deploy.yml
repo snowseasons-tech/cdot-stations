@@ -47,7 +47,14 @@ jobs:
           tags: cdot-smoke:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
       - run: bash scripts/smoke-test-image.sh cdot-smoke:ci
+        env:
+          BROWSER_CHECK: "1"
       - uses: docker/build-push-action@v7
         with:
           context: .

@@ -581,6 +581,8 @@ Each station card, and each pin's popup, also has **Live road conditions nearby*
 
 **Why links and not live data in the app.** COtrip's "Data Feeds" help page no longer exists, and no public, documented feed or key was found, so there is nothing sanctioned to pull from. The data's owner is CDOT; if you want it inside this page (for example closures near each port as a list), the route is to ask CDOT's COtrip team for access first (see the roadmap).
 
+**Work zones (WZDx), only with CDOT's permission.** `npm run sync:work-zones` reads CDOT's work zone feed (the WZDx format, listed in the public [WZDx registry](https://data.transportation.gov/d/69qe-yiui)) and writes `data/work-zones.json`. That feed needs an API key from COtrip, so the script does nothing unless `WZDX_FEED_URL` is set to the URL CDOT has issued. The URL is never printed or committed, and the output file is git-ignored. Only work zones are kept (incidents are skipped), and camelCase keys from some publishers are converted to snake_case; the field conventions follow [streetworks](https://pypi.org/project/streetworks/), an MIT Python SDK for WZDx. Get CDOT's written permission before running it on the server, and before showing the zones on the page.
+
 ## Inspection locations on the map
 
 Tick **Show inspection locations on the map** (above the station list) to draw circles for where level I–V inspections happened, sized by count. Pick any combination of levels and either the last 12 months or all available data (about 3 years); click a circle for its level breakdown and out-of-service rates. Purple circles are ports of entry; blue circles are towns. The choices are remembered in the browser.

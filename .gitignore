@@ -1,3 +1,4 @@
 node_modules/
 data/status.json
 data/status.json.tmp
+data/work-zones.json

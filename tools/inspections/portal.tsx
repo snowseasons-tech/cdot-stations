@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  MapPin, Truck, AlertTriangle, BarChart2, Award, ClipboardList, Radio, Crosshair, Plus, Trash2, Phone, Building2, X
+  MapPin, Truck, AlertTriangle, BarChart2, Award, ClipboardList, Radio, Crosshair, LocateFixed, Plus, Trash2, Phone, Building2, X
 } from 'lucide-react';
 import {
   LEVELS, THROUGH, FETCHED_AT, COVERAGE, LAST_12, PORTS, PORT_TREND, PORTS_LAST_12, TOWNS, STATE_LAST_12, monthLabel
@@ -21,10 +21,11 @@ const STATUS_STYLE = {
 const portStatus = (port, live) => (port.planned ? 'planned' : live?.[port.id]?.status || 'unknown');
 
 // Leaflet map: ports of entry, towns sized by inspections, and this session's spotted pins.
-const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, isDropPinMode, onMapClickForPin }) => {
+const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, onPinMove, isDropPinMode, draft, onMapClickForPin, onUseLocation, locating, locateError }) => {
   const mapRef = useRef(null);
   const leafletInstance = useRef(null);
   const layerRef = useRef(null);
+  const draftRef = useRef(null);
   const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
@@ -60,13 +61,42 @@ const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, isD
     };
   }, []);
 
+  // A tap places a spot in drop mode, and also moves the spot already waiting in the form.
   useEffect(() => {
     if (!leafletInstance.current) return;
     const map = leafletInstance.current;
-    const handleMapClick = (e) => { if (isDropPinMode) onMapClickForPin({ lat: e.latlng.lat, lng: e.latlng.lng }); };
+    // Set the cursor on the container's style: Leaflet owns its class names, and a className on this div would wipe them.
+    map.getContainer().style.cursor = isDropPinMode ? 'crosshair' : '';
+    const handleMapClick = (e) => { if (isDropPinMode || draft) onMapClickForPin({ lat: e.latlng.lat, lng: e.latlng.lng }); };
     map.on('click', handleMapClick);
     return () => { map.off('click', handleMapClick); };
-  }, [mapReady, isDropPinMode, onMapClickForPin]);
+  }, [mapReady, isDropPinMode, draft, onMapClickForPin]);
+
+  // The spot waiting in the form, shown as a dashed pin the user can drag to fine-tune.
+  useEffect(() => {
+    if (!mapReady || !window.L) return;
+    const L = window.L, map = leafletInstance.current;
+    if (!draft) {
+      draftRef.current?.remove();
+      draftRef.current = null;
+      return;
+    }
+    if (!draftRef.current) {
+      draftRef.current = L.marker([draft.lat, draft.lng], {
+        draggable: true, zIndexOffset: 3000,
+        icon: L.divIcon({
+          className: '',
+          html: `<div style="width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#EC489933;border:2.5px dashed #EC4899;cursor:grab"></div>`,
+          iconSize: [26, 26], iconAnchor: [13, 26]
+        })
+      })
+        .bindTooltip('Drag to fine-tune the spot')
+        .on('dragend', e => { const ll = e.target.getLatLng(); onMapClickForPin({ lat: ll.lat, lng: ll.lng }); })
+        .addTo(map);
+    } else {
+      draftRef.current.setLatLng([draft.lat, draft.lng]);
+    }
+  }, [mapReady, draft, onMapClickForPin]);
 
   useEffect(() => {
     if (!layerRef.current || !window.L) return;
@@ -108,18 +138,19 @@ const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, isD
     pins.forEach(pin => {
       const isSel = selected?.id === pin.id, size = isSel ? 30 : 24;
       L.marker([pin.lat, pin.lng], {
-        zIndexOffset: 2000,
+        zIndexOffset: 2000, draggable: true,
         icon: L.divIcon({
           className: '',
           html: `<div style="width:${size}px;height:${size}px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#18181b;border:2.5px solid #EC4899;box-shadow:0 0 12px #EC4899b0;cursor:pointer"></div>`,
           iconSize: [size, size], iconAnchor: [size / 2, size]
         })
       })
-        .bindTooltip(`<b>${esc(pin.title)}</b><br>Spotted ${esc(pin.time)}`)
+        .bindTooltip(`<b>${esc(pin.title)}</b><br>Spotted ${esc(pin.time)}<br><i>Drag to move</i>`)
         .on('click', () => onSelect(pin))
+        .on('dragend', e => { const ll = e.target.getLatLng(); onPinMove(pin.id, { lat: ll.lat, lng: ll.lng }); })
         .addTo(layer);
     });
-  }, [mapReady, ports, towns, pins, liveStatus, selected, onSelect]);
+  }, [mapReady, ports, towns, pins, liveStatus, selected, onSelect, onPinMove]);
 
   useEffect(() => {
     if (mapReady && selected) leafletInstance.current.flyTo([selected.lat, selected.lng], Math.max(leafletInstance.current.getZoom(), 9), { duration: 1 });
@@ -127,18 +158,27 @@ const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, isD
 
   return (
     <div className="relative w-full h-full rounded-xl overflow-hidden border border-slate-700/60 shadow-2xl">
-      <div ref={mapRef} className={`w-full h-full bg-slate-950 z-0 ${isDropPinMode ? 'cursor-crosshair' : ''}`} />
+      <div ref={mapRef} className="w-full h-full bg-slate-950 z-0" />
       {isDropPinMode && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[500] bg-pink-950/90 text-pink-200 border border-pink-500/60 px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 text-xs font-bold whitespace-nowrap">
-          <Crosshair className="w-4 h-4 text-pink-400" />
-          Tap the map where you saw it
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[500] bg-pink-950/90 text-pink-200 border border-pink-500/60 px-3 py-2 rounded-2xl shadow-2xl flex flex-col items-center gap-1.5 text-xs font-bold text-center max-w-[90%]">
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            <Crosshair className="w-4 h-4 text-pink-400" />
+            Tap the map where you saw it
+          </div>
+          <button type="button" onClick={onUseLocation} disabled={locating}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-600 hover:bg-pink-500 disabled:opacity-60 text-white font-bold">
+            <LocateFixed className="w-3.5 h-3.5" />
+            {locating ? 'Finding you…' : 'Use my location'}
+          </button>
+          {locateError && <div className="text-[11px] font-normal text-amber-300">{locateError}</div>}
         </div>
       )}
-      <div className="absolute top-3 right-3 z-[400] bg-slate-900/90 p-3 rounded-xl border border-slate-700/60 shadow-2xl text-[11px] space-y-1.5 text-slate-300 max-w-[200px]">
+      {/* Hidden while placing a spot, so the tap prompt has the top of the map to itself. */}
+      {!isDropPinMode && <div className="absolute top-3 right-3 z-[400] bg-slate-900/90 p-3 rounded-xl border border-slate-700/60 shadow-2xl text-[11px] space-y-1.5 text-slate-300 max-w-[200px]">
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-600 border-2 border-slate-500"></span>Port of entry (ring = status)</div>
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-cyan-400/50 border border-cyan-600"></span>Town: bigger = more inspections</div>
         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-zinc-900 border-2 border-pink-500"></span>Spotted today (this tab only)</div>
-      </div>
+      </div>}
     </div>
   );
 };
@@ -254,6 +294,20 @@ export default function App() {
   const onSelect = useCallback(item => setSelectedItem(item), []);
   const handleMapClickForPin = useCallback(coords => { setPendingCoords(coords); setIsDropPinMode(false); }, []);
 
+  // Driving past a station is the common case, so the phone's own position can place the pin.
+  const [locating, setLocating] = useState(false);
+  const [locateError, setLocateError] = useState('');
+  const useMyLocation = useCallback(() => {
+    if (!navigator.geolocation) { setLocateError('Location is not available here. Tap the map instead.'); return; }
+    setLocating(true);
+    setLocateError('');
+    navigator.geolocation.getCurrentPosition(
+      pos => { setLocating(false); handleMapClickForPin({ lat: pos.coords.latitude, lng: pos.coords.longitude }); },
+      () => { setLocating(false); setLocateError('Could not get your location. Tap the map instead.'); },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 15000 }
+    );
+  }, [handleMapClickForPin]);
+
   const handlePinFormSubmit = (e) => {
     e.preventDefault();
     const pin = {
@@ -267,6 +321,11 @@ export default function App() {
     setPendingCoords(null);
     setPinForm(blankPin);
   };
+  // Dragging a placed pin on the map saves its new position.
+  const movePin = useCallback((id, coords) => {
+    setPins(prev => prev.map(p => (p.id === id ? { ...p, ...coords } : p)));
+    setSelectedItem(s => (s?.id === id ? { ...s, ...coords } : s));
+  }, []);
   const deletePin = (id) => {
     setPins(pins.filter(p => p.id !== id));
     if (selectedItem?.id === id) setSelectedItem(null);
@@ -377,7 +436,8 @@ export default function App() {
               </div>
               <div className="flex-1 relative min-h-0">
                 <InspectionMap ports={filteredPorts} towns={filteredTowns} pins={pins} liveStatus={liveStatus}
-                  selected={selectedItem} onSelect={onSelect} isDropPinMode={isDropPinMode} onMapClickForPin={handleMapClickForPin} />
+                  selected={selectedItem} onSelect={onSelect} onPinMove={movePin} isDropPinMode={isDropPinMode} draft={pendingCoords}
+                  onMapClickForPin={handleMapClickForPin} onUseLocation={useMyLocation} locating={locating} locateError={locateError} />
               </div>
             </div>
 
@@ -397,6 +457,14 @@ export default function App() {
                     </select>
                   </div>
                   <textarea className={inputCls} rows={2} maxLength={280} placeholder="Notes" value={pinForm.notes} onChange={(e) => setPinForm({ ...pinForm, notes: e.target.value })} />
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+                    <span>Dropped at {pendingCoords.lat.toFixed(4)}, {pendingCoords.lng.toFixed(4)}. Tap the map or drag the pin to move it.</span>
+                    <button type="button" onClick={useMyLocation} disabled={locating}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 whitespace-nowrap">
+                      <LocateFixed className="w-3 h-3" />{locating ? 'Finding you…' : 'Use my location'}
+                    </button>
+                  </div>
+                  {locateError && <p className="text-[11px] text-amber-300">{locateError}</p>}
                   <p className="text-[10px] text-slate-500">{sessionNote}</p>
                   <button type="submit" className="w-full py-2 bg-pink-600 hover:bg-pink-500 text-white rounded-lg font-bold">Add pin</button>
                 </form>

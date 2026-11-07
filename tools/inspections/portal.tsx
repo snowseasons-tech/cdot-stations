@@ -21,7 +21,7 @@ const STATUS_STYLE = {
 const portStatus = (port, live) => (port.planned ? 'planned' : live?.[port.id]?.status || 'unknown');
 
 // Leaflet map: ports of entry, towns sized by inspections, and this session's spotted pins.
-const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, isDropPinMode, draft, onMapClickForPin, onUseLocation, locating, locateError }) => {
+const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, onPinMove, isDropPinMode, draft, onMapClickForPin, onUseLocation, locating, locateError }) => {
   const mapRef = useRef(null);
   const leafletInstance = useRef(null);
   const layerRef = useRef(null);
@@ -138,18 +138,19 @@ const InspectionMap = ({ ports, towns, pins, liveStatus, selected, onSelect, isD
     pins.forEach(pin => {
       const isSel = selected?.id === pin.id, size = isSel ? 30 : 24;
       L.marker([pin.lat, pin.lng], {
-        zIndexOffset: 2000,
+        zIndexOffset: 2000, draggable: true,
         icon: L.divIcon({
           className: '',
           html: `<div style="width:${size}px;height:${size}px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#18181b;border:2.5px solid #EC4899;box-shadow:0 0 12px #EC4899b0;cursor:pointer"></div>`,
           iconSize: [size, size], iconAnchor: [size / 2, size]
         })
       })
-        .bindTooltip(`<b>${esc(pin.title)}</b><br>Spotted ${esc(pin.time)}`)
+        .bindTooltip(`<b>${esc(pin.title)}</b><br>Spotted ${esc(pin.time)}<br><i>Drag to move</i>`)
         .on('click', () => onSelect(pin))
+        .on('dragend', e => { const ll = e.target.getLatLng(); onPinMove(pin.id, { lat: ll.lat, lng: ll.lng }); })
         .addTo(layer);
     });
-  }, [mapReady, ports, towns, pins, liveStatus, selected, onSelect]);
+  }, [mapReady, ports, towns, pins, liveStatus, selected, onSelect, onPinMove]);
 
   useEffect(() => {
     if (mapReady && selected) leafletInstance.current.flyTo([selected.lat, selected.lng], Math.max(leafletInstance.current.getZoom(), 9), { duration: 1 });
@@ -320,6 +321,11 @@ export default function App() {
     setPendingCoords(null);
     setPinForm(blankPin);
   };
+  // Dragging a placed pin on the map saves its new position.
+  const movePin = useCallback((id, coords) => {
+    setPins(prev => prev.map(p => (p.id === id ? { ...p, ...coords } : p)));
+    setSelectedItem(s => (s?.id === id ? { ...s, ...coords } : s));
+  }, []);
   const deletePin = (id) => {
     setPins(pins.filter(p => p.id !== id));
     if (selectedItem?.id === id) setSelectedItem(null);
@@ -430,7 +436,7 @@ export default function App() {
               </div>
               <div className="flex-1 relative min-h-0">
                 <InspectionMap ports={filteredPorts} towns={filteredTowns} pins={pins} liveStatus={liveStatus}
-                  selected={selectedItem} onSelect={onSelect} isDropPinMode={isDropPinMode} draft={pendingCoords}
+                  selected={selectedItem} onSelect={onSelect} onPinMove={movePin} isDropPinMode={isDropPinMode} draft={pendingCoords}
                   onMapClickForPin={handleMapClickForPin} onUseLocation={useMyLocation} locating={locating} locateError={locateError} />
               </div>
             </div>

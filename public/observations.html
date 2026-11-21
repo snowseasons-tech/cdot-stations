@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Inspection observations · Colorado</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="/observations.css">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script type="module" src="/observations.js"></script>
+</head>
+<body>
+<header class="top"><a href="/">← Station tracker</a><button id="lock" hidden>Lock workspace</button></header>
+<main>
+  <header class="intro">
+    <div><h1>Inspection observations</h1><p>Record where and when you saw a temporary roadside inspection in Colorado.</p></div>
+    <button class="primary" id="add" hidden>+ Add observation</button>
+  </header>
+  <p id="message" role="status"></p>
+  <form id="unlock" class="panel">
+    <h2>Unlock your workspace</h2>
+    <label>Workspace access key<input name="key" type="password" required autocomplete="off"></label>
+    <button class="primary">Unlock</button>
+  </form>
+  <section id="workspace" class="layout" hidden aria-label="Observation workspace">
+    <section class="panel map-panel" aria-label="Map and sources">
+      <div id="map" aria-label="Colorado map"></div>
+      <div id="placement" class="placement" hidden><p id="placement-tip">Tap the map to place a pin.</p><button id="details" type="button" hidden>Enter details ↓</button></div>
+      <div class="legend">
+        <span><i class="dot"></i> User-reported observation</span>
+        <label><input id="official" type="checkbox"> Show official port locations</label>
+        <small id="official-note">Official data covers permanent ports. Temporary observations are unverified. Follow posted signs and officer instructions.</small>
+      </div>
+    </section>
+    <aside class="panel reports">
+      <section id="archive">
+        <div class="reports-head"><h2>Saved observations</h2><button id="refresh" type="button">Refresh</button></div>
+        <div class="filters">
+          <label>Roadway<input id="road-filter" type="search" placeholder="e.g. I-70"></label>
+          <label>Status<select id="status-filter"><option value="">Any status</option><option value="active">Active</option><option value="inactive">Inactive</option><option value="unknown">Unknown</option></select></label>
+        </div>
+        <label class="check"><input id="old" type="checkbox"> Include reports 24 hours or older</label>
+        <ul id="reports"></ul>
+      </section>
+      <form id="editor" hidden>
+        <h2 id="editor-title">New observation</h2>
+        <p>Tap the map to place a pin. Drag it or use the coordinates to adjust its position.</p>
+        <button id="center" type="button">Place at map center</button>
+        <div class="filters">
+          <label>Latitude<input name="lat" type="number" step="any" required></label>
+          <label>Longitude<input name="lng" type="number" step="any" required></label>
+        </div>
+        <label>Roadway<input name="roadway" maxlength="80" placeholder="e.g. I-70" required></label>
+        <label>Observed time <small>(device time)</small><input name="observedAt" type="datetime-local" required></label>
+        <div class="filters">
+          <label>Status when observed<select name="status"><option value="unknown">Unknown</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+          <label>Direction<select name="direction"><option value="unknown">Unknown</option><option value="northbound">Northbound</option><option value="southbound">Southbound</option><option value="eastbound">Eastbound</option><option value="westbound">Westbound</option><option value="both">Both</option></select></label>
+        </div>
+        <label>Notes <small>(optional)</small><textarea name="notes" maxlength="1000" rows="3" placeholder="Avoid names, plates and other identifying details."></textarea></label>
+        <p id="edit-message" role="status"></p>
+        <div class="actions"><button class="primary">Save observation</button><button id="cancel" type="button">Cancel</button></div>
+      </form>
+    </aside>
+  </section>
+</main>
+</body>
+</html>

@@ -8,8 +8,9 @@ import { importStatuses } from './importer.js';
 import { summarize, createSummaryCache } from './inspections.js';
 import { summarizeLocations, parseLevels, PERIODS } from './inspection-locations.js';
 import { parseSearch, createSearcher, exportAll, toCsv, toSql, EXPORT_MAX, SearchError } from './inspection-search.js';
-import { FailureLimiter, RateLimiter, identify, parseWriteTokens } from './auth.js';
+import { FailureLimiter, RateLimiter, identify, parseWriteTokens, tokenMatches } from './auth.js';
 import { loadAccessConfig, createAccessVerifier, requiresAccess } from './access.js';
+import { openObservations } from './observations.js';
 import { Members } from './members.js';
 import { loadStripeConfig, createCheckoutSession, fetchOffer, describeOffer, termOf, verifyWebhook, StripeError, PRODUCT } from './stripe.js';
 import { Subscriptions, LimitReached, createNotifier, createWebPushSender, loadPushConfig, validateRequest, isPushEndpoint } from './push.js';
@@ -51,7 +52,12 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
   searchImpl = createSearcher(), searchLimiter = new RateLimiter({ max: 30, windowMs: 60_000 }),
   exportImpl = exportAll, exportLimiter = new RateLimiter({ max: 5, windowMs: 60_000 }),
   writeTokens = parseWriteTokens(process.env.WRITE_TOKENS),
+  observationToken = process.env.OBSERVATION_TOKEN,
+  observationsFile = process.env.OBSERVATIONS_FILE ?? join(statusFile, '../observations.json'),
+  observationLimiter = new FailureLimiter(), observationNow = Date.now,
   accessConfig = loadAccessConfig(), accessFetch = fetch } = {}) {
+  const observations = observationToken?.length >= 32
+    ? await openObservations(observationsFile, observationNow) : null;
   const { stations, fetchedAt } = JSON.parse(await readFile(stationsFile, 'utf8'));
   const inspections = await readFile(inspectionsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
   const locations = await readFile(locationsFile, 'utf8').then(JSON.parse, (e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
@@ -157,6 +163,42 @@ export async function createApp({ stationsFile = join(ROOT, 'data/stations.json'
         if (!salesPath) return json(res, 404, { error: 'not found' });
       }
       if (salesPath && !selling) return json(res, 404, { error: 'not found' });
+
+      const observationPath = pathname.match(/^\/api\/observations(?:\/([a-f0-9-]{36}))?$/);
+      if (observationPath) {
+        if (!observations) return json(res, 503, { error: 'The observation workspace is disabled.' });
+        const client = clientOf(req);
+        const wait = observationLimiter.retryAfter(client);
+        if (wait) {
+          res.setHeader('retry-after', wait);
+          return json(res, 429, { error: 'Too many attempts. Try again later.' });
+        }
+        if (!tokenMatches(req.headers.authorization, observationToken)) {
+          observationLimiter.fail(client);
+          return json(res, 401, { error: 'Enter a valid workspace access key.' });
+        }
+        const id = observationPath[1];
+        if (!id && req.method === 'GET') return json(res, 200, { reports: observations.list() });
+        const methods = id ? ['PUT', 'DELETE'] : ['POST'];
+        if (!methods.includes(req.method)) return json(res, 405, { error: 'Method not allowed.' });
+        if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) {
+          return json(res, 415, { error: 'Send JSON.' });
+        }
+        const body = await readBody(req);
+        if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+          return json(res, 400, { error: 'Enter observation details.' });
+        }
+        try {
+          const result = await observations.change(id, req.method, body);
+          if (result === null) return json(res, 404, { error: 'This observation has been deleted.' });
+          if (result === false) return json(res, 409, { error: 'This observation changed. Refresh before editing it again.' });
+          return json(res, id ? 200 : 201, result);
+        } catch (error) {
+          if (error instanceof RangeError) return json(res, 400, { error: error.message });
+          console.error('Observation save failed', error.code);
+          return json(res, 500, { error: 'Could not save the observation. Try again.' });
+        }
+      }
 
       if (pathname === '/api/offer') {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' });

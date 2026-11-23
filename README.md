@@ -890,3 +890,44 @@ Still open: what each tier includes beyond the seat count, whether there is a tr
 
 Wait-time estimates and PrePass/Drivewyze bypass data (no public feed was found; those services show status inside their own apps), and public user accounts.
 
+
+## Private inspection observations
+
+Open `/observations.html` or use **Inspection observations** from the Truck
+Inspections page. Unlock the workspace, select **Add observation**, tap the map,
+then drag the pin or adjust its coordinates. Enter the roadway, direction, status
+at the time of observation, local observation time, and any notes. Use **Edit**
+or **Delete** on a saved report. Roadway, status, and age filters apply to both
+the list and the observation markers.
+
+To try it on your own computer:
+
+```sh
+npm ci
+export OBSERVATION_TOKEN="$(node -p "require('node:crypto').randomBytes(32).toString('hex')")"
+printf 'Workspace key: %s\n' "$OBSERVATION_TOKEN"
+npm start
+```
+
+Open `http://localhost:3000/observations.html` and enter the printed key. The
+observation API is disabled without a dedicated key of at least 32 characters.
+This MVP uses one shared workspace key for all reads and writes. Every holder
+can see, edit, and delete its reports. Share it privately and rotate it to revoke
+access. For private hosting, use HTTPS and one Node process per data file.
+Set `OBSERVATIONS_FILE` to a persistent, restricted path if needed. By default
+the file lives beside the status file. Keep the file and its backups private.
+
+The map uses manually selected coordinates and does not request device GPS.
+The workspace key stays in memory and is cleared on lock or reload. OpenStreetMap
+receives normal basemap requests for the area in view. Avoid including names,
+plates, home addresses, or other identifying information in notes.
+
+Temporary pins are user-reported, and their status describes what was observed
+at the recorded time. After 24 hours they are hidden by default and labeled
+**Stale** when shown. Reports are retained until deleted. The optional blue
+reference layer uses the repository's CDOT Port of Entry dataset and displays
+its fetch date. It contains permanent port locations and does not verify
+temporary observations or indicate whether a port is currently open.
+
+Run `npm test` for the repository suite, including access control, input
+validation, persistence across restart, staleness, and edit conflicts.
